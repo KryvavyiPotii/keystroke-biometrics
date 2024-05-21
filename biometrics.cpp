@@ -142,9 +142,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     static int iType = 0;
 
     // Create buffers for keystroke data.
-    static DWORD* dwPress, * dwHold;
     static std::vector<DWORD> vPress, vHold;
-    static DWORD dwPressSize = 0, dwHoldSize = 0;
 
     switch (uMsg)
     {
@@ -180,10 +178,6 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         // Cleanup.
         {
-            // Free allocated memory.
-            if (dwPress) delete[] dwPress;
-            if (dwHold) delete[] dwHold;
-
             // Remove edit control subclass.
             HWND hwndPassword = GetDlgItem(hwnd, FORM_PASSWORD);
 
@@ -212,39 +206,34 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
         case SRID_PRESS:
         {
-            // Clear previous data.
-            if (dwPress) delete[] dwPress;
-
-            // Get buffer size.
-            dwPressSize = pcds->cbData / sizeof(DWORD);
-
-            // Allocate memory for received data.
-            dwPress = new DWORD[dwPressSize];
-
             // Store received data.
-            memcpy_s(dwPress, pcds->cbData, pcds->lpData, pcds->cbData);
+            vPress.assign(
+                (DWORD*)pcds->lpData,
+                (DWORD*)pcds->lpData + pcds->cbData / sizeof(DWORD)
+            );
+
+            DBG_dwShowArr(vPress.data(), vPress.size());
 
             break;
         }
 
         case SRID_HOLD:
         {
-            if (dwHold) delete[] dwHold;
-
-            dwHoldSize = pcds->cbData / sizeof(DWORD);
-            dwHold = new DWORD[dwHoldSize];
-            memcpy_s(dwHold, pcds->cbData, pcds->lpData, pcds->cbData);
+            vHold.assign(
+                (DWORD*)pcds->lpData,
+                (DWORD*)pcds->lpData + pcds->cbData / sizeof(DWORD)
+            );
 
             break;
         }
         }
 
         // If all data was received, proceed to next steps.
-        if (dwPressSize && dwHoldSize)
+        if (!vPress.empty() && !vHold.empty())
         {
             // Create vectors with excluded errors.
-            excludeErrors(&vPress, dwPress, dwPressSize);
-            excludeErrors(&vHold, dwHold, dwHoldSize);
+            excludeErrors(vPress);
+            excludeErrors(vHold);
 
             // Authenticate or register the user according to the form's type.
             if (iType == FORM_LOGIN)
@@ -272,7 +261,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         // Check entered credentials.
         if (identify(&user, strCreds, hwnd) == 1)
         {
-            if (authenticate(&user, &vPress, &vHold, strCreds, hwnd) == 1)
+            if (authenticate(&user, vPress, vHold, strCreds, hwnd) == 1)
             {
                 MessageBox(
                     NULL,
@@ -356,9 +345,9 @@ LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
         }
 
         // Send keystroke data.
-        sendData(hwndParent, hwnd, vPress.data(), vPress.size() * sizeof(DWORD), SRID_PRESS);
-        sendData(hwndParent, hwnd, vHold.data(), vHold.size() * sizeof(DWORD), SRID_HOLD);
-
+        sendData(hwndParent, hwnd, vPress, SRID_PRESS);
+        sendData(hwndParent, hwnd, vHold, SRID_HOLD);
+        
         // Cleanup.
         prevPressTime = 0;
         vPress.clear();
