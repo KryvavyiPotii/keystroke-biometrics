@@ -1,8 +1,5 @@
 #include "biometrics.h"
 
-const wchar_t wcBanned[] = { L'%', CREDS_DELIMITER[0] };
-const wchar_t cstrCredsPath[] = L"./creds.txt";
-
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
 {
     // Main class creation and registration.
@@ -68,15 +65,19 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     switch (uMsg)
     {
     case WM_CREATE:
+    {
         if (addMainControls(hwnd) < 0)
         {
             DestroyWindow(hwnd);
         }
         return 0;
+    }
 
     case WM_DESTROY:
+    {
         PostQuitMessage(0);
         return 0;
+    }
 
     case WM_PAINT:
     {
@@ -95,30 +96,34 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
         case MAIN_LOGIN:
         {
-            // Open login form.
-            if (openForm(hwnd, FORM_LOGIN) < 0)
+            // Create a form.
+            HWND hwndForm = createForm(hwnd, FORM_LOGIN);
+
+            if (!hwndForm)
             {
                 break;
             }
 
-            // Hide identification window.
-            ShowWindow(hwnd, SW_HIDE);
+            // Set form type.
+            SendMessage(hwndForm, WM_FORMTYPE, FORM_LOGIN, 0);
+
+            // Disable the main window.
+            EnableWindow(hwnd, FALSE);
 
             break;
         }
         case MAIN_REGISTER:
         {
-            // Open registration form.
-            if (openForm(hwnd, FORM_REGISTER) < 0)
+            HWND hwndForm = createForm(hwnd, FORM_REGISTER);
+
+            if (!hwndForm)
             {
                 break;
             }
 
-            // Disable main window.
-            //EnableWindow(hwnd, FALSE);
+            SendMessage(hwndForm, WM_FORMTYPE, FORM_REGISTER, 0);
 
-            // Hide identification window.
-            ShowWindow(hwnd, SW_HIDE);
+            EnableWindow(hwnd, FALSE);
 
             break;
         }
@@ -133,17 +138,31 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    // Get main window handle.
-    static HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
+    // Set form type (login or register) for data processing.
+    static int iType = 0;
+
+    // Create buffers for keystroke data.
+    static DWORD* dwPress, * dwHold;
+    static std::vector<DWORD> vPress, vHold;
+    static DWORD dwPressSize = 0, dwHoldSize = 0;
 
     switch (uMsg)
     {
     case WM_CREATE:
+    {
         if (addFormControls(hwnd) < 0)
         {
             DestroyWindow(hwnd);
         }
         return 0;
+    }
+
+    // Get the form type from the main window.
+    case WM_FORMTYPE:
+    {
+        iType = wParam;
+        return 0;
+    }
 
     case WM_PAINT:
     {
@@ -159,9 +178,127 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
     case WM_CLOSE:
     {
-        // Show main window and close the form.
-        ShowWindow(hwndOwner, SW_SHOW);
+        // Cleanup.
+        {
+            // Free allocated memory.
+            if (dwPress) delete[] dwPress;
+            if (dwHold) delete[] dwHold;
+
+            // Remove edit control subclass.
+            HWND hwndPassword = GetDlgItem(hwnd, FORM_PASSWORD);
+
+            RemoveWindowSubclass(hwndPassword, KeystrokeProc, 0);
+        }
+
+        // Enable and show the main window.
+        {
+            // Get main window handle.
+            HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
+
+            EnableWindow(hwndOwner, TRUE);
+            ShowWindow(hwndOwner, SW_SHOWNORMAL);
+        }
+
         DestroyWindow(hwnd);
+        return 0;
+    }
+
+    // Receive data from the password EDIT control.
+    case WM_COPYDATA:
+    {
+        COPYDATASTRUCT* pcds = (COPYDATASTRUCT*)lParam;
+        
+        switch (pcds->dwData)
+        {
+        case SRID_PRESS:
+        {
+            // Clear previous data.
+            if (dwPress) delete[] dwPress;
+
+            // Get buffer size.
+            dwPressSize = pcds->cbData / sizeof(DWORD);
+
+            // Allocate memory for received data.
+            dwPress = new DWORD[dwPressSize];
+
+            // Store received data.
+            memcpy_s(dwPress, pcds->cbData, pcds->lpData, pcds->cbData);
+
+            break;
+        }
+
+        case SRID_HOLD:
+        {
+            if (dwHold) delete[] dwHold;
+
+            dwHoldSize = pcds->cbData / sizeof(DWORD);
+            dwHold = new DWORD[dwHoldSize];
+            memcpy_s(dwHold, pcds->cbData, pcds->lpData, pcds->cbData);
+
+            break;
+        }
+        }
+
+        // If all data was received, proceed to next steps.
+        if (dwPressSize && dwHoldSize)
+        {
+            // Create vectors with excluded errors.
+            excludeErrors(&vPress, dwPress, dwPressSize);
+            excludeErrors(&vHold, dwHold, dwHoldSize);
+
+            // Authenticate or register the user according to the form's type.
+            if (iType == FORM_LOGIN)
+                SendMessage(hwnd, WM_LOGIN, 0, 0);
+            if (iType == FORM_REGISTER)
+                SendMessage(hwnd, WM_REGISTER, 0, 0);
+        }
+
+        return 0;
+    }
+
+    // Initiate user authentication.
+    case WM_LOGIN:
+    {
+        // Read all credentials from the file.
+        std::wstring strCreds;
+
+        if (readCreds(strCreds) < 0)
+        {
+            return -1;
+        }
+
+        User user;
+
+        // Check entered credentials.
+        if (identify(&user, strCreds, hwnd) == 1)
+        {
+            if (authenticate(&user, &vPress, &vHold, strCreds, hwnd) == 1)
+            {
+                MessageBox(
+                    NULL,
+                    L"You have successfully logged in.\n"
+                    L"Press \"OK\" or close this message to return to the main window.",
+                    L"Notification",
+                    MB_OK
+                );
+                SendMessage(hwnd, WM_CLOSE, 0, 0);
+                return 0;
+            }
+        }
+
+        MessageBox(
+            NULL,
+            L"Incorrect username/password.",
+            L"Alert",
+            MB_OK
+        );
+
+        return -1;
+    }
+
+    // Register a new user.
+    case WM_REGISTER:
+    {
         return 0;
     }
 
@@ -169,12 +306,20 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         switch (LOWORD(wParam))
         {
         case FORM_SUBMIT:
+        {
+            // Signal the password EDIT control to send gathered data.
+            HWND hwndPassword = GetDlgItem(hwnd, FORM_PASSWORD);
+
+            SendMessage(hwndPassword, WM_SENDKEYSTROKEDATA, 0, 0);
+
             break;
+        }
+
         case FORM_CANCEL:
-            // Show main window and close the form.
-            ShowWindow(hwndOwner, SW_SHOW);
-            DestroyWindow(hwnd);
+        {
+            SendMessage(hwnd, WM_CLOSE, 0, 0);
             break;
+        }
         }
 
         return 0;
@@ -184,401 +329,81 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
 }
 
-int addMainControls(HWND hwndMain)
+LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
-    if (!CreateWindow(
-        L"BUTTON", L"Login",
-        WS_BORDER | WS_CHILD | WS_VISIBLE,
-        (MAIN_WIDTH) / 2 - BUTTON_WIDTH - ELEMENT_OFFSET,
-        ELEMENT_OFFSET,
-        BUTTON_WIDTH * 2,
-        ELEMENT_HEIGHT,
-        hwndMain, (HMENU)MAIN_LOGIN, NULL, NULL
-    ))
+    // Vectors for storing keystroke data:
+    // - duration of delays between key presses.
+    static std::vector<DWORD> vPress;
+    // - duration of a key hold.
+    static std::vector<DWORD> vHold;
+
+    // Variables for duration calculation.
+    static DWORD currPressTime, prevPressTime = 0;
+    static DWORD holdTime, releaseTime;
+
+    switch (uMsg)
     {
-        showError(L"addMainControls::BUTTON::LOGIN");
-        return -1;
-    }
-
-    if (!CreateWindow(
-        L"BUTTON", L"Register",
-        WS_BORDER | WS_CHILD | WS_VISIBLE,
-        (MAIN_WIDTH) / 2 - BUTTON_WIDTH - ELEMENT_OFFSET,
-        ELEMENT_OFFSET * 4,
-        BUTTON_WIDTH * 2,
-        ELEMENT_HEIGHT,
-        hwndMain, (HMENU)MAIN_REGISTER, NULL, NULL
-    ))
+    // Send gathered data to the form.
+    case WM_SENDKEYSTROKEDATA:
     {
-        showError(L"addMainControls::BUTTON::LOGIN");
-        return -1;
-    }
+        // Get the handle to the form.
+        HWND hwndParent = GetParent(hwnd);
 
-    return 0;
-}
-
-int addFormControls(HWND hwndForm)
-{
-    if (!CreateWindow(
-        L"STATIC", L"Username:",
-        WS_CHILD | WS_VISIBLE,
-        ELEMENT_OFFSET,
-        ELEMENT_OFFSET,
-        TEXT_WIDTH - ELEMENT_OFFSET * 2,
-        ELEMENT_HEIGHT,
-        hwndForm, NULL, NULL, NULL
-    ))
-    {
-        showError(L"addFormControls::STATIC::USERNAME");
-        return -1;
-    }
-
-    if (!CreateWindow(
-        L"EDIT", L"",
-        ES_AUTOHSCROLL | WS_BORDER | WS_CHILD | WS_VISIBLE,
-        ELEMENT_OFFSET,
-        ELEMENT_OFFSET * 3,
-        TEXT_WIDTH - ELEMENT_OFFSET * 2,
-        ELEMENT_HEIGHT,
-        hwndForm, (HMENU)FORM_USERNAME, NULL, NULL
-    ))
-    {
-        showError(L"addFormControls::EDIT::USERNAME");
-        return -1;
-    }
-
-    if (!CreateWindow(
-        L"STATIC", L"Password:",
-        WS_CHILD | WS_VISIBLE,
-        ELEMENT_OFFSET,
-        ELEMENT_OFFSET * 5,
-        TEXT_WIDTH - ELEMENT_OFFSET * 2,
-        ELEMENT_HEIGHT,
-        hwndForm, NULL, NULL, NULL
-    ))
-    {
-        showError(L"addFormControls::STATIC::PASSWORD");
-        return -1;
-    }
-
-    if (!CreateWindow(
-        L"EDIT", L"",
-        ES_AUTOHSCROLL | ES_PASSWORD | WS_BORDER | WS_CHILD | WS_VISIBLE,
-        ELEMENT_OFFSET,
-        ELEMENT_OFFSET * 7,
-        TEXT_WIDTH - ELEMENT_OFFSET * 2,
-        ELEMENT_HEIGHT,
-        hwndForm, (HMENU)FORM_PASSWORD, NULL, NULL
-    ))
-    {
-        showError(L"addFormControls::EDIT::PASSWORD");
-        return -1;
-    }
-
-    if (!CreateWindow(
-        L"BUTTON", L"Submit",
-        WS_BORDER | WS_CHILD | WS_VISIBLE,
-        ELEMENT_OFFSET,
-        FORM_HEIGHT - ELEMENT_OFFSET * 7,
-        BUTTON_WIDTH,
-        ELEMENT_HEIGHT,
-        hwndForm, (HMENU)FORM_SUBMIT, NULL, NULL
-    ))
-    {
-        showError(L"addFormControls::BUTTON::SUBMIT");
-        return -1;
-    }
-
-    if (!CreateWindow(
-        L"BUTTON", L"Cancel",
-        WS_BORDER | WS_CHILD | WS_VISIBLE,
-        FORM_WIDTH - BUTTON_WIDTH - ELEMENT_OFFSET * 3,
-        FORM_HEIGHT - ELEMENT_OFFSET * 7,
-        BUTTON_WIDTH,
-        ELEMENT_HEIGHT,
-        hwndForm, (HMENU)FORM_CANCEL, NULL, NULL
-    ))
-    {
-        showError(L"addFormControls::BUTTON::CANCEL");
-        return -1;
-    }
-
-    return 0;
-}
-
-int identify(std::wstring& strUsername, HWND hwndForm)
-{
-    // Create buffer for username.
-    strUsername.resize(USERNAME_SIZE + 1, 0);
-
-    // Get handle to username field.
-    HWND hwndUsername = GetDlgItem(hwndForm, FORM_USERNAME);
-
-    if (hwndUsername == NULL)
-    {
-        showError(L"identify::GetDlgItem");
-        return -1;
-    }
-
-    // Get username.
-    int iSize = GetWindowText(hwndUsername, &strUsername[0], USERNAME_SIZE);
-
-    if (!iSize)
-    {
-        if (!GetLastError())
+        if (!hwndParent)
         {
-            MessageBox(
-                NULL,
-                L"Username is empty",
-                L"Alert",
-                MB_OK | MB_ICONWARNING
-            );
-        }
-        else
-        {
-            showError(L"identify::GetWindowText");
-        }
-
-        return -1;
-    }
-
-    // Resize buffer to remove extra null bytes.
-    strUsername.resize(iSize);
-
-    // Check if username contains banned characters.
-    if (!isValid(strUsername))
-    {
-        MessageBox(
-            NULL,
-            L"Username contains forbidden characters",
-            L"Alert",
-            MB_OK | MB_ICONWARNING
-        );
-        return -1;
-    }
-
-    // Check if user is registered.
-    {
-        // Read all credentials.
-        std::string strMultibyteCreds;
-
-        if (readCreds(strMultibyteCreds) < 0)
-        {
-            return -1;
-        }
-
-        // Convert data.
-        std::wstring strWideCreds;
-
-        if (toWide(strWideCreds, strMultibyteCreds) < 0)
-        {
-            return -1;
-        }
-
-        // Try to find user's entry.
-        if (findEntry(strUsername, strWideCreds) == std::vector<int>{ -1, -1 })
-        {
-            return 0;
-        }
-    }
-
-    return 1;
-}
-
-int openForm(HWND hwndOwner, const std::wstring& strFormTitle)
-{
-    // Create user window.
-    HINSTANCE hInstance = (HINSTANCE)GetModuleHandle(NULL);
-
-    if (!hInstance)
-    {
-        showError(L"openForm::GetWindowLongW");
-        return -1;
-    }
-
-    // Create and show user window.
-    HWND hwndUser = CreateWindow(
-        FORM_CLASS, strFormTitle.c_str(),
-        WS_OVERLAPPED | WS_SYSMENU,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        FORM_WIDTH, FORM_HEIGHT,
-        hwndOwner, NULL, hInstance, NULL
-    );
-
-    if (hwndUser)
-    {
-        ShowWindow(hwndUser, SW_SHOW);
-        UpdateWindow(hwndUser);
-    }
-    else
-    {
-        showError(L"openForm::CreateWindow");
-        return -1;
-    }
-
-    return 0;
-}
-
-int readCreds(std::string& strCreds)
-{
-    // Open file for reading.
-    std::ifstream credsFile(cstrCredsPath, std::ios::binary);
-
-    if (!credsFile.is_open())
-    {
-        showError(L"readCreds::std::ifstream::is_open");
-        return -1;
-    }
-
-    // Read file contents
-    strCreds.assign(
-        (std::istreambuf_iterator<char>(credsFile)),
-        (std::istreambuf_iterator<char>())
-    );
-
-    // Cleanup.
-    credsFile.close();
-
-    return 0;
-}
-
-std::vector<int> findEntry(const std::wstring& strUsername, const std::wstring& strCreds)
-{
-    // We need to append delimiter to avoid deleting wrong user.
-    // Example: trying to delete user "bob" we may accidently delete "bob123".
-    std::wstring str = strUsername + CREDS_DELIMITER;
-
-    // Get user credentials entry.
-    int iEntryPosition = strCreds.find(str.c_str());
-
-    if (iEntryPosition == std::wstring::npos)
-    {
-        return { -1, -1 };
-    }
-
-    // Store location of entry that is to be removed.
-    int iEntryLength = 0;
-
-    for (int i = iEntryPosition; i < strCreds.size() + 1; i++)
-    {
-        if (strCreds[i] == 0 || strCreds[i] == L'\n')
-        {
-            iEntryLength = i - iEntryPosition;
+            showError(L"KeystrokeProc::GetWindow");
             break;
         }
+
+        // Send keystroke data.
+        sendData(hwndParent, hwnd, vPress.data(), vPress.size() * sizeof(DWORD), SRID_PRESS);
+        sendData(hwndParent, hwnd, vHold.data(), vHold.size() * sizeof(DWORD), SRID_HOLD);
+
+        // Cleanup.
+        prevPressTime = 0;
+        vPress.clear();
+        vHold.clear();
+
+        break;
     }
 
-    return { iEntryPosition, iEntryLength };
-}
-
-int isValid(const std::wstring& strInput)
-{
-    // Check banned characters.
-    for (int i = 0; i < wcslen(wcBanned); i++)
+    case WM_KEYDOWN:
     {
-        if (strInput.find(wcBanned[i]) != std::wstring::npos)
+        // Calculate time between key presses.
+        // Ignore special keys.
+        if (wParam != VK_SHIFT)
         {
-            return 0;
+            // Set the key hold time.
+            holdTime = timeGetTime();
+
+            // Check if the pressed key is the first one.
+            if (prevPressTime)
+            {
+                // Calculate time from the previous key press.
+                currPressTime = timeGetTime();
+                vPress.push_back(currPressTime - prevPressTime);
+                prevPressTime = currPressTime;
+            }
         }
+        break;
     }
 
-    return 1;
-}
-
-int toWide(std::wstring& strWide, const std::string& strMultibyte)
-{
-    // Get necessary buffer size.
-    int iSize = MultiByteToWideChar(
-        CP_UTF8,
-        0,
-        &strMultibyte[0],
-        -1,
-        NULL,
-        0
-    );
-
-    if (!iSize)
+    case WM_KEYUP:
     {
-        showError(L"toWide::SIZE::MultiByteToWideChar");
-        return -1;
+        // Calculate time between key presses.
+        if (wParam != VK_SHIFT)
+        {
+            // Set the previous key press time.
+            prevPressTime = timeGetTime();
+
+            // Calculate duration of the key hold.
+            releaseTime = timeGetTime();
+            vHold.push_back(releaseTime - holdTime);
+        }
+        break;
     }
 
-    // Convert UTF-8 (multibyte) characters to wide characters.
-    strWide.resize(iSize);
-
-    if (!MultiByteToWideChar(
-        CP_UTF8,
-        0,
-        &strMultibyte[0],
-        -1,
-        &strWide[0],
-        iSize))
-    {
-        showError(L"toWide::CONVERSION::MultiByteToWideChar");
-        return -1;
+    default:
+        return DefSubclassProc(hwnd, uMsg, wParam, lParam);
     }
-
-    return 0;
-}
-
-int toMultibyte(std::string& strMultibyte, const std::wstring& strWide)
-{
-    // Get necessary buffer size.
-    int iSize = WideCharToMultiByte(
-        CP_UTF8,
-        0,
-        &strWide[0],
-        -1,
-        NULL,
-        0,
-        NULL,
-        NULL
-    );
-    if (!iSize)
-    {
-        showError(L"toMultibyte::SIZE::WideCharToMultiByte");
-        return -1;
-    }
-
-    // Convert wide characters to UTF-8 (multibyte) characters.
-    strMultibyte.resize(iSize);
-
-    if (!WideCharToMultiByte(
-        CP_UTF8,
-        0,
-        &strWide[0],
-        -1,
-        &strMultibyte[0],
-        iSize,
-        NULL,
-        NULL))
-    {
-        showError(L"toMultibyte::CONVERSION::WideCharToMultiByte");
-        return -1;
-    }
-
-    return 0;
-}
-
-void showError(const std::wstring& cstrError)
-{
-    std::wstringstream sstr;
-
-    sstr << cstrError << L". Error: " << GetLastError()
-        << L" (0x" << std::hex << GetLastError() << L")" << std::endl;
-
-    std::wstring str = sstr.str();
-
-    MessageBox(NULL, str.c_str(), L"Error", MB_OK);
-}
-
-void showValue(const std::wstring& cstrName, auto aValue)
-{
-    std::wstringstream sstrValue;
-
-    sstrValue << aValue << std::endl;
-
-    std::wstring strValue = sstrValue.str();
-
-    MessageBox(NULL, strValue.c_str(), cstrName.c_str(), 0);
 }
