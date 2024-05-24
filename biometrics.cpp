@@ -112,6 +112,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             break;
         }
+
         case MAIN_REGISTER:
         {
             HWND hwndForm = createForm(hwnd, FORM_REGISTER);
@@ -142,7 +143,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     static int iType = 0;
 
     // Create buffers for keystroke data.
-    static std::vector<DWORD> vPress, vHold;
+    static std::vector<DWORD> vPressData, vHoldData;
 
     switch (uMsg)
     {
@@ -178,7 +179,11 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         // Cleanup.
         {
-            // Remove edit control subclass.
+            vPressData.clear();
+            vHoldData.clear();
+            iType = 0;
+
+            // Remove password EDIT control subclass.
             HWND hwndPassword = GetDlgItem(hwnd, FORM_PASSWORD);
 
             RemoveWindowSubclass(hwndPassword, KeystrokeProc, 0);
@@ -190,7 +195,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
 
             EnableWindow(hwndOwner, TRUE);
-            ShowWindow(hwndOwner, SW_SHOWNORMAL);
+            ShowWindow(hwndOwner, SW_SHOW);
         }
 
         DestroyWindow(hwnd);
@@ -207,39 +212,50 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case SRID_PRESS:
         {
             // Store received data.
-            vPress.assign(
+            vPressData.assign(
                 (DWORD*)pcds->lpData,
                 (DWORD*)pcds->lpData + pcds->cbData / sizeof(DWORD)
             );
 
-            DBG_dwShowArr(vPress.data(), vPress.size());
+            //DBG_dwShowArr(vPressData.data(), vPressData.size());
 
             break;
         }
 
         case SRID_HOLD:
         {
-            vHold.assign(
+            vHoldData.assign(
                 (DWORD*)pcds->lpData,
                 (DWORD*)pcds->lpData + pcds->cbData / sizeof(DWORD)
             );
+
+            //DBG_dwShowArr(vHoldData.data(), vHoldData.size());
 
             break;
         }
         }
 
         // If all data was received, proceed to next steps.
-        if (!vPress.empty() && !vHold.empty())
+        if (!vPressData.empty() && !vHoldData.empty())
         {
-            // Create vectors with excluded errors.
-            excludeErrors(vPress);
-            excludeErrors(vHold);
+            // Exclude errors from gathered data.
+            excludeErrors(&vPressData);
+            excludeErrors(&vHoldData);
 
-            // Authenticate or register the user according to the form's type.
+            // Authenticate or register the user according to the form type.
             if (iType == FORM_LOGIN)
                 SendMessage(hwnd, WM_LOGIN, 0, 0);
-            if (iType == FORM_REGISTER)
+            else if (iType == FORM_REGISTER)
                 SendMessage(hwnd, WM_REGISTER, 0, 0);
+        }
+        else if (vPressData.empty() && vHoldData.empty())
+        {
+            MessageBox(
+                NULL,
+                L"Failed to gather keystroke biometrics data",
+                L"Alert",
+                MB_OK | MB_ICONWARNING
+            );
         }
 
         return 0;
@@ -248,7 +264,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     // Initiate user authentication.
     case WM_LOGIN:
     {
-        // Read all credentials from the file.
+        // Read credentials from the file.
         std::wstring strCreds;
 
         if (readCreds(strCreds) < 0)
@@ -256,13 +272,33 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             return -1;
         }
 
+        // Calculate user's statistical data.
         User user;
 
-        // Check entered credentials.
-        if (identify(&user, strCreds, hwnd) == 1)
+        user.setPressStats(vPressData);
+        user.setHoldStats(vHoldData);
+
+        // Check if user is registered.
+        if (identifyUser(&user, strCreds, hwnd) == 1)
         {
-            if (authenticate(&user, vPress, vHold, strCreds, hwnd) == 1)
+            // Check entered credentials.
+            if (authenticateUser(&user, strCreds, hwnd) == 1)
             {
+                // Get the handle to the main window.
+                HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
+
+                if (!hwndOwner)
+                {
+                    showError(L"FormProc::GetWindow");
+                    return -1;
+                }
+
+                // Hide the main window.
+                ShowWindow(hwndOwner, SW_HIDE);
+                // Hide the form.
+                ShowWindow(hwnd, SW_HIDE);
+
+                // Authorize user.
                 MessageBox(
                     NULL,
                     L"You have successfully logged in.\n"
@@ -270,17 +306,24 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     L"Notification",
                     MB_OK
                 );
+
+                // Close the form.
                 SendMessage(hwnd, WM_CLOSE, 0, 0);
+
                 return 0;
             }
         }
 
         MessageBox(
             NULL,
-            L"Incorrect username/password.",
+            L"Incorrect username/password/biometrics.",
             L"Alert",
             MB_OK
         );
+
+        // Cleanup.
+        vPressData.clear();
+        vHoldData.clear();
 
         return -1;
     }
@@ -288,7 +331,56 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     // Register a new user.
     case WM_REGISTER:
     {
-        return 0;
+        // Read credentials from the file.
+        std::wstring strCreds;
+
+        if (readCreds(strCreds) < 0)
+        {
+            return -1;
+        }
+
+        // Calculate user's statistical data.
+        User user;
+
+        user.setPressStats(vPressData);
+        user.setHoldStats(vHoldData);
+
+        if (registerUser(&user, strCreds, hwnd) == 0)
+        {
+            // Get the handle to the main window.
+            HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
+
+            if (!hwndOwner)
+            {
+                showError(L"FormProc::GetWindow");
+                return -1;
+            }
+
+            // Hide the main window.
+            ShowWindow(hwndOwner, SW_HIDE);
+            // Hide the form.
+            ShowWindow(hwnd, SW_HIDE);
+
+            // Authorize user.
+            MessageBox(
+                NULL,
+                L"You have successfully registered.\n"
+                L"Press \"OK\" or close this message to return to the main window.",
+                L"Notification",
+                MB_OK
+            );
+
+            // Close the form.
+            SendMessage(hwnd, WM_CLOSE, 0, 0);
+
+            return 0;
+        }
+
+        // Cleanup.
+        vPressData.clear();
+        vHoldData.clear();
+
+        return -1;
     }
 
     case WM_COMMAND:
@@ -320,15 +412,17 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
 {
+    // Vector that stores held keys.
+    static std::vector<KeyPress> vKeyHeld;
+
     // Vectors for storing keystroke data:
     // - duration of delays between key presses.
-    static std::vector<DWORD> vPress;
+    static std::vector<DWORD> vPressData;
     // - duration of a key hold.
-    static std::vector<DWORD> vHold;
+    static std::vector<DWORD> vHoldData;
 
-    // Variables for duration calculation.
-    static DWORD currPressTime, prevPressTime = 0;
-    static DWORD holdTime, releaseTime;
+    // Variable that stores time of the previous key press.
+    static DWORD dwPrevPressTime = 0;
 
     switch (uMsg)
     {
@@ -340,54 +434,99 @@ LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 
         if (!hwndParent)
         {
-            showError(L"KeystrokeProc::GetWindow");
-            break;
+            showError(L"KeystrokeProc::GetParent");
+            return -1;
         }
 
         // Send keystroke data.
-        sendData(hwndParent, hwnd, vPress, SRID_PRESS);
-        sendData(hwndParent, hwnd, vHold, SRID_HOLD);
+        sendData(hwndParent, hwnd, vPressData, SRID_PRESS);
+        sendData(hwndParent, hwnd, vHoldData, SRID_HOLD);
         
         // Cleanup.
-        prevPressTime = 0;
-        vPress.clear();
-        vHold.clear();
+        vKeyHeld.clear();
+        vPressData.clear();
+        vHoldData.clear();
+        dwPrevPressTime = 0;
 
         break;
     }
 
     case WM_KEYDOWN:
     {
-        // Calculate time between key presses.
-        // Ignore special keys.
-        if (wParam != VK_SHIFT)
+        // Submit on ENTER press.
+        if (wParam == VK_RETURN)
         {
-            // Set the key hold time.
-            holdTime = timeGetTime();
+            HWND hwndParent = GetParent(hwnd);
 
-            // Check if the pressed key is the first one.
-            if (prevPressTime)
+            if (!hwndParent)
             {
-                // Calculate time from the previous key press.
-                currPressTime = timeGetTime();
-                vPress.push_back(currPressTime - prevPressTime);
-                prevPressTime = currPressTime;
+                showError(L"KeystrokeProc::GetParent");
+                return -1;
             }
+
+            SendMessage(hwndParent, WM_COMMAND, FORM_SUBMIT, 0);
+            break;
+        }
+        // Clear everything on BACKSPACE and DELETE press
+        else if (wParam == VK_BACK || wParam == VK_DELETE)
+        {
+            // Remove entered text.
+            SendMessage(hwnd, WM_SETTEXT, 0, (LPARAM)L"");
+
+            // Cleanup.
+            vKeyHeld.clear();
+            vPressData.clear();
+            vHoldData.clear();
+            dwPrevPressTime = 0;
+        }
+        // Calculate time between key presses.
+        // Ignore any key except for numbers and letters.
+        else if (wParam >= 0x30 && wParam <= 0x5A)
+        {
+            if (!dwPrevPressTime)
+            {
+                dwPrevPressTime = timeGetTime();
+            }
+
+            // Measure and store the time of a key press.
+            DWORD dwCurrPressTime = timeGetTime();
+
+            vPressData.push_back(dwCurrPressTime - dwPrevPressTime);
+
+            // Enqueue key press information.
+            KeyPress kp = { wParam, dwCurrPressTime };
+
+            vKeyHeld.push_back(kp);
+
+            // Reset the previous key press time.
+            dwPrevPressTime = dwCurrPressTime;
         }
         break;
     }
 
     case WM_KEYUP:
     {
-        // Calculate time between key presses.
-        if (wParam != VK_SHIFT)
+        // Calculate duration of key holds.
+        if (wParam >= 0x30 && wParam <= 0x5A)
         {
-            // Set the previous key press time.
-            prevPressTime = timeGetTime();
+            // Find a released key.
+            int i = 0;
 
-            // Calculate duration of the key hold.
-            releaseTime = timeGetTime();
-            vHold.push_back(releaseTime - holdTime);
+            while (i < vKeyHeld.size())
+            {
+                if (vKeyHeld[i].wKeyCode == wParam)
+                {
+                    // Calculate key hold duration.
+                    vHoldData.push_back(timeGetTime() - vKeyHeld[i].dwTime);
+
+                    // Remove the released key from the queue.
+                    vKeyHeld.erase(vKeyHeld.begin() + i);
+
+                    break;
+                }
+
+                i++;
+            }
         }
         break;
     }
