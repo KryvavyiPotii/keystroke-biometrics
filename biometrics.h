@@ -50,8 +50,23 @@
 
 // Path to file with user credentials.
 const wchar_t cstrCredsPath[] = L"./creds.txt";
-// List of banned characters for isValid function.
+// List of banned characters for valid function.
 const wchar_t wcBanned[] = { L'%', CREDS_DELIMITER[0] };
+
+// Struct that contains data about a key press.
+struct KeyPress
+{
+    WORD wKeyCode = 0;  // virtual-key code
+    DWORD dwTime = 0; // time in ms when key was pressed
+};
+
+// Struct that contains statistical data.
+struct Stats
+{
+    int iSize = 0;  // n - size of data set.
+    double dExpectation = 0;
+    double dVariance = 0;
+};
 
 // Class that represents a user with their credentials.
 class User
@@ -62,21 +77,21 @@ public:
     // Methods to retrieve user credentials.
     std::wstring getUsername();
     std::wstring getPassword();
-    double getPressExp();
-    double getPressVar();
-    double getHoldExp();
-    double getHoldVar();
+    Stats getPressStats();
+    Stats getHoldStats();
 
     // Methods to set user credentials.
-    void setUsername(const std::wstring strNewUsername);
-    void setPassword(const std::wstring strNewPassword);
-    void setPressExp(double dNewPressExpectation);
-    void setPressVar(double dNewPressVariance);
-    void setHoldExp(double dNewHoldExpectation);
-    void setHoldVar(double dNewHoldVariance);
+    void setUsername(const std::wstring strUsername);
+    void setPassword(const std::wstring strPassword);
+    void setPressStats(const Stats& statsPress);
+    void setPressStats(const std::vector<DWORD>& vPressData);
+    void setHoldStats(const Stats& statsHold);
+    void setHoldStats(const std::vector<DWORD>& vHoldData);
 
     // Fill object's parameters based on the credentials string.
-    int getCreds(const std::wstring& strName, const std::wstring& strCreds);
+    int getCreds(const std::wstring& strUsername, const std::wstring& strCreds);
+    // Add/update user's entry to credentials string.
+    int setCreds(std::wstring& strCreds);
 
     // Check if user is registered by checking the credentials string.
     int isRegistered(const std::wstring& strCreds);
@@ -88,17 +103,16 @@ public:
     //     Success - 2D vector { position of entry; length of entry }.
     //     Failure - 2D vector { -1; -1 }.
     std::vector<int> findEntry(const std::wstring& strCreds);
-
-    // Parse an entry with credentials and fill object parameters.
+    // Create an entry from user parameters.
+    std::wstring createEntry();
+    // Parse an entry with credentials and fill user parameters.
     int parseEntry(const std::wstring& strEntry);
 
 private:
     std::wstring strUsername;
     std::wstring strPassword;
-    double dPressExpectation = 0;
-    double dPressVariance = 0;
-    double dHoldExpectation = 0;
-    double dHoldVariance = 0;
+    Stats statsPress = { 0, 0, 0 };
+    Stats statsHold = { 0, 0, 0 };
 };
 
 // GUI .
@@ -120,8 +134,9 @@ int addFormControls(HWND hwndForm);
 void sendData(HWND hwndReceiver, HWND hwndSender, const std::vector<DWORD>& vData, DWORD dwID);
 
 // Credentials processing.
-int identify(User* pUser, const std::wstring& strCreds, HWND hwndForm);
-int authenticate(User* pUser, std::vector<DWORD>& vPress, std::vector<DWORD>& vHold, const std::wstring& strCreds, HWND hwndForm);
+int identifyUser(User* pUser, const std::wstring& strCreds, HWND hwndForm);
+int authenticateUser(User* pUser, std::wstring& strCreds, HWND hwndForm);
+int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm);
 // Read contents of the credentials file.
 // File is expected to have UTF-8 encoding.
 // Arguments:
@@ -130,13 +145,14 @@ int authenticate(User* pUser, std::vector<DWORD>& vPress, std::vector<DWORD>& vH
 //     Success - 0.
 //     Failure - -1.
 int readCreds(std::wstring& strCreds);
+int writeCreds(const std::wstring& strCreds, std::ios::openmode mode);
 // Check entered credentials for banned characters.
 // Arguments:
 //     [in] strInput - reference to string with credentials.
 // Return value:
 //     Success - 1.
 //     Failure - 0 (user not found), -1 (error).
-int isValid(const std::wstring& strInput);
+int valid(const std::wstring& strInput);
 // Convert UTF-8 string to wide character string.
 // Arguments:
 //     [in, out] strWide - reference to wstring that receives converted data.
@@ -158,8 +174,9 @@ int toMultibyte(std::string& strMultibyte, const std::wstring& strWide);
 double expectation(const std::vector<DWORD>& vData);
 double variance(const std::vector<DWORD>& vData);
 double variance(double dExp, const std::vector<DWORD>& vData);
-int excludeErrors(std::vector<DWORD>& vData);
-int compareData(const std::vector<DWORD>& vCreds, std::vector<DWORD>& vData);
+int excludeErrors(std::vector<DWORD>* vData);
+Stats calculateStats(const std::vector<DWORD>& vData);
+int compareStats(const Stats& statsIn1, const Stats& statsIn2);
 
 // Debugging.
 // Show error message box.
@@ -173,6 +190,291 @@ void showError(const std::wstring& strError);
 //     [in] aValue - numeric value that needs to be shown.
 void showValue(const std::wstring& strName, auto aValue);
 void DBG_dwShowArr(const DWORD* dwArr, int iSize);
+
+std::wstring User::getUsername() { return strUsername; }
+std::wstring User::getPassword() { return strPassword; }
+Stats User::getPressStats() { return statsPress; }
+Stats User::getHoldStats() { return statsHold; }
+void User::setUsername(const std::wstring strUsername)
+{
+    this->strUsername = strUsername;
+}
+void User::setPassword(const std::wstring strPassword)
+{
+    this->strPassword = strPassword;
+}
+void User::setPressStats(const Stats& statsPress)
+{
+    this->statsPress = statsPress;
+}
+void User::setPressStats(const std::vector<DWORD>& vPressData)
+{
+    // Create and set new key press stats to the user.
+    Stats statsPress = calculateStats(vPressData);
+
+    setPressStats(statsPress);
+}
+void User::setHoldStats(const Stats& statsHold)
+{
+    this->statsHold = statsHold;
+}
+void User::setHoldStats(const std::vector<DWORD>& vHoldData)
+{
+    // Create and set new key hold stats to the user.
+    Stats statsHold = calculateStats(vHoldData);
+
+    setHoldStats(statsHold);
+}
+int User::getCreds(const std::wstring& strUsername, const std::wstring& strCreds)
+{
+    // Set username.
+    setUsername(strUsername);
+
+    // Find position and length of user entry.
+    std::vector<int> vIndices = findEntry(strCreds);
+
+    if (vIndices[0] == -1 && vIndices[1] == -1)
+    {
+        // If the entry isn't found, user isn't registered.
+        return -1;
+    }
+
+    // Store the entry.
+    std::wstring strEntry;
+
+    strEntry = strCreds.substr(vIndices[0], vIndices[1]); // do not include line feed
+
+    // Parse entry and fill User object.
+    if (parseEntry(strCreds) < 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+int User::setCreds(std::wstring& strCreds)
+{    
+    // Create a new entry.
+    std::wstring strNewEntry = createEntry();
+    
+    // If user already has an entry, remove it.
+    if (isRegistered(strCreds))
+    {
+        // Find the old entry
+        std::vector<int> vIndices = findEntry(strCreds);
+
+        if (vIndices[0] == -1 && vIndices[1] == -1)
+        {
+            return -1;
+        }
+
+        // Remove the found entry.
+        strCreds.erase(vIndices[0], vIndices[1] + 2);
+    }
+
+    // Add the created entry to credentials.
+    strCreds.append(strNewEntry.c_str());
+
+    return 0;
+}
+int User::isRegistered(const std::wstring& strCreds)
+{
+    // Find position and length of user entry.
+    std::vector<int> vIndices = findEntry(strCreds);
+
+    if (vIndices[0] == -1 && vIndices[1] == -1)
+    {
+        // If the entry isn't found, user isn't registered.
+        return 0;
+    }
+
+    return 1;
+}
+std::vector<int> User::findEntry(const std::wstring& strCreds)
+{
+    // Check if username is set.
+    if (strUsername.empty())
+    {
+        return { -1, -1 };
+    }
+
+    // We need to append delimiter to avoid deleting wrong user.
+    // Example: trying to delete user "bob" we may accidently delete "bob123".
+    std::wstring str = strUsername + CREDS_DELIMITER;
+
+    // Get user credentials entry.
+    int iEntryPosition = strCreds.find(str.c_str());
+
+    if (iEntryPosition == std::wstring::npos)
+    {
+        return { -1, -1 };
+    }
+
+    // Store location of entry that is to be removed.
+    int iEntryLength = 0;
+
+    for (int i = iEntryPosition; i < strCreds.size() + 1; i++)
+    {
+        if (strCreds[i] == 0 || strCreds[i] == L'\r')
+        {
+            iEntryLength = i - iEntryPosition;
+            break;
+        }
+    }
+
+    return { iEntryPosition, iEntryLength };
+}
+std::wstring User::createEntry()
+{
+    // Remove extra null bytes.
+    strUsername.erase(
+        std::find(strUsername.begin(), strUsername.end(), '\0'),
+        strUsername.end()
+    );
+
+    strPassword.erase(
+        std::find(strPassword.begin(), strPassword.end(), '\0'),
+        strPassword.end()
+    );
+
+    std::wstring strEntry = strUsername + CREDS_DELIMITER
+        + strPassword + CREDS_DELIMITER
+        + std::to_wstring(statsPress.iSize) + CREDS_DELIMITER
+        + std::to_wstring(statsPress.dExpectation) + CREDS_DELIMITER
+        + std::to_wstring(statsPress.dVariance) + CREDS_DELIMITER
+        + std::to_wstring(statsHold.iSize) + CREDS_DELIMITER
+        + std::to_wstring(statsHold.dExpectation) + CREDS_DELIMITER
+        + std::to_wstring(statsHold.dVariance) + L"\r\n";
+
+    return strEntry;
+}
+int User::parseEntry(const std::wstring& strEntry)
+{
+    std::wstring strTemp(strEntry.c_str());
+    int iBeginIndex, iDelimiterIndex;
+
+    // Parse strings.
+    std::wstring strUsername, strPassword;
+
+    // Get a username from the entry.
+    iBeginIndex = 0;
+    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
+    strUsername = strTemp.substr(0, iDelimiterIndex);
+
+    if (strUsername.empty())
+    {
+        showError(L"User::parseEntry()::USERNAME");
+        return -1;
+    }
+
+    iBeginIndex = iDelimiterIndex + 1;
+
+    // Get a password.
+    strTemp = strTemp.substr(iBeginIndex);
+    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
+    strPassword = strTemp.substr(0, iDelimiterIndex);
+
+    if (strPassword.empty())
+    {
+        showError(L"User::parseEntry()::PASSWORD");
+        return -1;
+    }
+
+    iBeginIndex = iDelimiterIndex + 1;
+
+    // Parse double values.
+    std::wstring strNumber;
+    Stats statsPress, statsHold;
+
+    // Get size of key press data.
+    strTemp = strTemp.substr(iBeginIndex);
+    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
+    strNumber = strTemp.substr(0, iDelimiterIndex);
+    statsPress.iSize = stoi(strNumber);
+
+    if (!statsPress.iSize)
+    {
+        showError(L"User::parseEntry()::PRESS_SIZE");
+        return -1;
+    }
+
+    iBeginIndex = iDelimiterIndex + 1;
+
+    // Get expectation of delays between key presses.
+    strTemp = strTemp.substr(iBeginIndex);
+    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
+    strNumber = strTemp.substr(0, iDelimiterIndex);
+    statsPress.dExpectation = stod(strNumber);
+
+    if (!statsPress.dExpectation)
+    {
+        showError(L"User::parseEntry()::PRESS_EXPECTATION");
+        return -1;
+    }
+
+    iBeginIndex = iDelimiterIndex + 1;
+
+    // Get variance of delays between key presses.
+    strTemp = strTemp.substr(iBeginIndex);
+    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
+    strNumber = strTemp.substr(0, iDelimiterIndex);
+    statsPress.dVariance = stod(strNumber);
+
+    if (!statsPress.dVariance)
+    {
+        showError(L"User::parseEntry()::PRESS_VARIANCE");
+        return -1;
+    }
+
+    iBeginIndex = iDelimiterIndex + 1;
+
+    // Get size of key hold data.
+    strTemp = strTemp.substr(iBeginIndex);
+    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
+    strNumber = strTemp.substr(0, iDelimiterIndex);
+    statsHold.iSize = stoi(strNumber);
+
+    if (!statsHold.iSize)
+    {
+        showError(L"User::parseEntry()::HOLD_SIZE");
+        return -1;
+    }
+
+    iBeginIndex = iDelimiterIndex + 1;
+
+    // Get expectation of key hold durations.
+    strTemp = strTemp.substr(iBeginIndex);
+    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
+    strNumber = strTemp.substr(0, iDelimiterIndex);
+    statsHold.dExpectation = stod(strNumber);
+
+    if (!statsHold.dExpectation)
+    {
+        showError(L"User::parseEntry()::HOLD_EXPECTATION");
+        return -1;
+    }
+
+    iBeginIndex = iDelimiterIndex + 1;
+
+    // Get variance of key hold durations.
+    iDelimiterIndex = strTemp.find(L"\r\n");
+    strNumber = strTemp.substr(iBeginIndex, iDelimiterIndex);
+    statsHold.dVariance = stod(strNumber);
+
+    if (!statsHold.dVariance)
+    {
+        showError(L"User::parseEntry()::HOLD_VARIANCE");
+        return -1;
+    }
+
+    // Store parsed data.
+    setUsername(strUsername);
+    setPassword(strPassword);
+    setPressStats(statsPress);
+    setHoldStats(statsHold);
+
+    return 0;
+}
 
 HWND createForm(HWND hwndOwner, int iType)
 {
@@ -369,55 +671,55 @@ void sendData(HWND hwndReceiver, HWND hwndSender, const std::vector<DWORD>& vDat
 }
 #pragma optimize( "", on )
 
-int identify(User* pUser, const std::wstring& strCreds, HWND hwndForm)
+int identifyUser(User* pUser, const std::wstring& strCreds, HWND hwndForm)
 {
-    // Create buffer for username.
-    std::wstring strUsername(USERNAME_SIZE + 1, 0);
-
     // Get handle to username field.
     HWND hwndUsername = GetDlgItem(hwndForm, FORM_USERNAME);
 
     if (!hwndUsername)
     {
-        showError(L"identify::GetDlgItem");
+        showError(L"identifyUser::GetDlgItem");
         return -1;
     }
 
     // Get username.
-    int iSize = GetWindowText(hwndUsername, &strUsername[0], USERNAME_SIZE);
-
-    if (!iSize)
+    std::wstring strUsername(USERNAME_SIZE + 1, 0);
     {
-        if (!GetLastError())
+        int iSize = GetWindowText(hwndUsername, &strUsername[0], USERNAME_SIZE);
+
+        if (!iSize)
+        {
+            if (!GetLastError())
+            {
+                MessageBox(
+                    NULL,
+                    L"Username is empty",
+                    L"Alert",
+                    MB_OK | MB_ICONWARNING
+                );
+            }
+            else
+            {
+                showError(L"identifyUser::GetWindowText");
+            }
+
+            return -1;
+        }
+
+        // Resize buffer to remove extra null bytes.
+        strUsername.resize(iSize);
+
+        // Check if username contains banned characters.
+        if (!valid(strUsername))
         {
             MessageBox(
                 NULL,
-                L"Username is empty",
+                L"Username must not contain special characters",
                 L"Alert",
                 MB_OK | MB_ICONWARNING
             );
+            return -1;
         }
-        else
-        {
-            showError(L"identify::GetWindowText");
-        }
-
-        return -1;
-    }
-
-    // Resize buffer to remove extra null bytes.
-    strUsername.resize(iSize);
-
-    // Check if username contains banned characters.
-    if (!isValid(strUsername))
-    {
-        MessageBox(
-            NULL,
-            L"Username contains forbidden characters",
-            L"Alert",
-            MB_OK | MB_ICONWARNING
-        );
-        return -1;
     }
 
     pUser->setUsername(strUsername);
@@ -425,7 +727,7 @@ int identify(User* pUser, const std::wstring& strCreds, HWND hwndForm)
     // Check if user is registered.
     return pUser->isRegistered(strCreds);
 }
-int authenticate(User* pUser, std::vector<DWORD>& vPress, std::vector<DWORD>& vHold, const std::wstring& strCreds, HWND hwndForm)
+int authenticateUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
 {
     // Get user password.
     std::wstring strPassword(PASSWORD_SIZE + 1, 0);
@@ -435,7 +737,7 @@ int authenticate(User* pUser, std::vector<DWORD>& vPress, std::vector<DWORD>& vH
 
         if (hwndPassword == NULL)
         {
-            showError(L"authenticate::GetDlgItem");
+            showError(L"authenticateUser::GetDlgItem");
             return -1;
         }
 
@@ -462,7 +764,10 @@ int authenticate(User* pUser, std::vector<DWORD>& vPress, std::vector<DWORD>& vH
     // Get user credentials from credentials file.
     User userCreds;
 
-    userCreds.getCreds(pUser->getUsername(), strCreds);
+    if (userCreds.getCreds(pUser->getUsername(), strCreds) < 0)
+    {
+        return -1;
+    }
 
     // Compare passwords.
     if (userCreds.getPassword().compare(pUser->getPassword()) != 0)
@@ -470,16 +775,111 @@ int authenticate(User* pUser, std::vector<DWORD>& vPress, std::vector<DWORD>& vH
         return 0;
     }
 
-    /*
-    // Compare keystroke data.
-    if (compareData(&userCreds, pvPress, pvHold) != 1)
+    // Compare statistical data.
+    Stats statsPressCreds = userCreds.getPressStats();
+    Stats statsPressAuth = pUser->getPressStats();
+    Stats statsHoldCreds = userCreds.getHoldStats();
+    Stats statsHoldAuth = pUser->getHoldStats();
+
+    if (compareStats(statsPressCreds, statsPressAuth) == 1
+        && compareStats(statsHoldCreds, statsHoldAuth) == 1)
     {
-        return 0;
+        // Update user's entry in the credentials string.
+        if (pUser->setCreds(strCreds) < 0)
+        {
+            return -1;
+        }
+
+        // Overwrite the file with credentials.
+        if (writeCreds(strCreds, std::ios::out) < 0)
+        {
+            return -1;
+        }
+
+        return 1;
     }
-    */
-    return 1;
+
+    return 0;
 }
-int isValid(const std::wstring& strInput)
+int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
+{
+    // Get username.
+    int iResult = identifyUser(pUser, strCreds, hwndForm);
+
+    if (iResult == 1)
+    {
+        MessageBox(
+            NULL,
+            L"User is already registered",
+            L"Alert",
+            MB_OK | MB_ICONWARNING
+        );
+        return -1;
+    }
+    else if (iResult < 0)
+    {
+        return -1;
+    }
+
+    // Get user password.
+    std::wstring strPassword(PASSWORD_SIZE + 1, 0);
+    {
+        // Get handle to password field.
+        HWND hwndPassword = GetDlgItem(hwndForm, FORM_PASSWORD);
+
+        if (hwndPassword == NULL)
+        {
+            showError(L"authenticateUser::GetDlgItem");
+            return -1;
+        }
+
+        // Get password.
+        int iSize = GetWindowText(hwndPassword, &strPassword[0], PASSWORD_SIZE);
+
+        // Check if reading didn't fail.
+        if (GetLastError())
+        {
+            return -1;
+        }
+        // Check if the password field is empty.
+        if (!iSize)
+        {
+            return 0;
+        }
+
+        // Resize buffer to remove extra null bytes.
+        strPassword.resize(iSize);
+
+        // Check if the password contains forbidden characters.
+        if (!valid(strPassword))
+        {
+            MessageBox(
+                NULL,
+                L"Password must not contain special characters",
+                L"Alert",
+                MB_OK | MB_ICONWARNING
+            );
+            return -1;
+        }
+    }
+
+    pUser->setPassword(strPassword);
+
+    // Update the credentials string.
+    if (pUser->setCreds(strCreds) < 0)
+    {
+        return -1;
+    }
+
+    // Overwrite the file with credentials.
+    if (writeCreds(strCreds, std::ios::out) < 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+int valid(const std::wstring& strInput)
 {
     // Check banned characters.
     for (int i = 0; i < wcslen(wcBanned); i++)
@@ -519,6 +919,40 @@ int readCreds(std::wstring& strCreds)
     {
         return -1;
     }
+
+    // Remove extra null bytes.
+    strCreds.erase(
+        std::find(strCreds.begin(), strCreds.end(), '\0'),
+        strCreds.end()
+    );
+
+    return 0;
+}
+int writeCreds(const std::wstring& strCreds, std::ios::openmode mode)
+{
+    // Open file for writing.
+    std::ofstream credsFile(cstrCredsPath, mode | std::ios::binary);
+
+    if (!credsFile.is_open())
+    {
+        showError(L"writeCreds::std::ofstream::open");
+        return -1;
+    }
+
+    // Convert credentials to UTF-8.
+    std::string strMultibyteCreds;
+
+    if (toMultibyte(strMultibyteCreds, strCreds) < 0)
+    {
+        showError(L"writeCreds::toMultibyte");
+        return -1;
+    }
+
+    // Write converted credentials to file.
+    credsFile << strMultibyteCreds;
+
+    // Cleanup.
+    credsFile.close();
 
     return 0;
 }
@@ -637,63 +1071,84 @@ double variance(double dExp, const std::vector<DWORD>& vData)
 
     return dVar;
 }
-int excludeErrors(std::vector<DWORD>& vData)
+int excludeErrors(std::vector<DWORD>* vData)
 {
-    // Create vector to store excluded elements.
-    std::vector<int> vExcluded;
+    // Create a vector copy for storing not excluded elements.
+    std::vector<DWORD> vExcluded;
 
-    for (int i = 0; i < vData.size(); i++)
+    for (int i = 0; i < vData->size(); i++)
     {
-        // Create a copy of passed vector for data processing.
-        std::vector<DWORD> vTemp = vData;
+        // Create a vector without i-th element.
+        std::vector<DWORD> vTemp = *vData;
 
-        // Remove i-th element from the copy.
         vTemp.erase(vTemp.begin() + i);
 
+        // Calculate Student's coefficient.
         double M = expectation(vTemp);
         double S = std::sqrt(variance(M, vTemp));
-        double t = (vTemp[i] - M) / S;
-
-        // Get absolute value.
+        double t = (vData->at(i) - M) / S;
         if (t < 0) t *= -1;
 
         // Check if i-th element should be excluded.
-        if (t <= t_05[vData.size() - 1])
+        if (t <= t_05[vData->size() - 1])
         {
-            vExcluded.push_back(i);
+            vExcluded.push_back(vData->at(i));
         }
     }
 
-    // Remove excluded elements.
-    for (int i : vExcluded)
-    {
-        vData.erase(vData.begin() + i);
-    }
+    // Remove marked elements.
+    *vData = vExcluded;
 
     return 0;
 }
-int compareData(const std::vector<DWORD>& vCreds, std::vector<DWORD>& vData)
+Stats calculateStats(const std::vector<DWORD>& vData)
 {
-    double dCredsExpectation = vCreds[0];
-    double dCredsVariance = vCreds[1];
+    // Calculate statistics.
+    double dExpectation = expectation(vData);
+    double dVariance = variance(dExpectation, vData);
 
-    double dAuthVariance = variance(vData);
+    return { (int)vData.size(), dExpectation, dVariance };
+}
+#pragma optimize( "", off )
+int compareStats(const Stats& statsIn1, const Stats& statsIn2)
+{
+    int n = statsIn1.iSize;
 
     // Calculate variances.
-    double Smax = max(dCredsVariance, dAuthVariance);
-    double Smin = min(dCredsVariance, dAuthVariance);
+    double Smax = max(statsIn1.dVariance, statsIn2.dVariance);
+    double Smin = min(statsIn1.dVariance, statsIn2.dVariance);
 
     // Calculate F-coefficient.
     double F = Smax / Smin;
 
     // Check calculated F-coefficient.
-    if (F > f_05[vData.size() - 1])
+    if (F > f_05[n - 1])
     {
         return 0;
     }
 
+    // Calculate Student's coefficient.
+    double S = std::sqrt(((statsIn1.dVariance * statsIn1.dVariance
+        + statsIn2.dVariance * statsIn2.dVariance) * (n - 1)
+        / (2 * n - 1)));
+
+    double t = (statsIn1.dExpectation - statsIn2.dExpectation) * std::sqrt(n / 2);
+
+    if (t < 0) t *= -1;
+
+    // Check calculated Student's coefficient.
+    if (t > t_05[n - 1])
+    {
+        t /= S;
+        if (t > t_05[n - 1])
+        {
+            return 0;
+        }
+    }
+
     return 1;
 }
+#pragma optimize( "", on )
 
 void showError(const std::wstring& strError)
 {
@@ -727,207 +1182,4 @@ void DBG_dwShowArr(const DWORD* dwArr, int iSize)
     }
 
     MessageBox(0, out.c_str(), L"Out", 0);
-}
-
-std::wstring User::getUsername() { return strUsername; }
-std::wstring User::getPassword() { return strPassword; }
-double User::getPressExp() { return dPressExpectation; }
-double User::getPressVar() { return dPressVariance; }
-double User::getHoldExp() { return dHoldExpectation; }
-double User::getHoldVar() { return dHoldVariance; }
-
-void User::setUsername(const std::wstring strNewUsername)
-{
-    strUsername = strNewUsername;
-}
-void User::setPassword(const std::wstring strNewPassword)
-{
-    strPassword = strNewPassword;
-}
-void User::setPressExp(double dNewPressExpectation)
-{
-    dPressExpectation = dNewPressExpectation;
-}
-void User::setPressVar(double dNewPressVariance)
-{
-    dPressVariance = dNewPressVariance;
-}
-void User::setHoldExp(double dNewHoldExpectation)
-{
-    dHoldExpectation = dNewHoldExpectation;
-}
-void User::setHoldVar(double dNewHoldVariance)
-{
-    dHoldVariance = dNewHoldVariance;
-}
-
-int User::getCreds(const std::wstring& strName, const std::wstring& strCreds)
-{
-    // Set username.
-    this->setUsername(strName);
-
-    // Find position and length of user entry.
-    std::vector<int> vIndices = findEntry(strCreds);
-
-    if (vIndices[0] == -1 && vIndices[1] == -1)
-    {
-        // If the entry isn't found, user isn't registered.
-        return -1;
-    }
-
-    // Store the entry.
-    std::wstring strEntry;
-
-    strEntry = strCreds.substr(vIndices[0], vIndices[1]); // do not include line feed
-
-    // Parse entry and fill User object.
-    if (this->parseEntry(strCreds) < 0)
-    {
-        return -1;
-    }
-
-    return 0;
-}
-int User::isRegistered(const std::wstring& strCreds)
-{
-    // Find position and length of user entry.
-    std::vector<int> vIndices = findEntry(strCreds);
-
-    if (vIndices[0] == -1 && vIndices[1] == -1)
-    {
-        // If the entry isn't found, user isn't registered.
-        return 0;
-    }
-
-    return 1;
-}
-std::vector<int> User::findEntry(const std::wstring& strCreds)
-{
-    // Check if username is set.
-    if (strUsername.empty())
-    {
-        return { -1, -1 };
-    }
-
-    // We need to append delimiter to avoid deleting wrong user.
-    // Example: trying to delete user "bob" we may accidently delete "bob123".
-    std::wstring str = strUsername + CREDS_DELIMITER;
-
-    // Get user credentials entry.
-    int iEntryPosition = strCreds.find(str.c_str());
-
-    if (iEntryPosition == std::wstring::npos)
-    {
-        return { -1, -1 };
-    }
-
-    // Store location of entry that is to be removed.
-    int iEntryLength = 0;
-
-    for (int i = iEntryPosition; i < strCreds.size() + 1; i++)
-    {
-        if (strCreds[i] == 0 || strCreds[i] == L'\n')
-        {
-            iEntryLength = i - iEntryPosition;
-            break;
-        }
-    }
-
-    return { iEntryPosition, iEntryLength };
-}
-int User::parseEntry(const std::wstring& strEntry)
-{
-    User uTemp = *this;
-    std::wstring strTemp(strEntry.c_str());
-    int iBeginIndex;
-    int iDelimiterIndex;
-
-    // Get username from the entry.
-    iBeginIndex = 0;
-    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
-    this->setUsername(strTemp.substr(0, iDelimiterIndex));
-
-    if (strUsername.empty())
-    {
-        showError(L"User::parseEntry()::USERNAME");
-        // Undo changes.
-        *this = uTemp;
-        return -1;
-    }
-
-    iBeginIndex = iDelimiterIndex + 1;
-
-    // Get password.
-    strTemp = strTemp.substr(iBeginIndex);
-    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
-    this->setPassword(strTemp.substr(0, iDelimiterIndex));
-
-    if (strPassword.empty())
-    {
-        showError(L"User::parseEntry()::PASSWORD");
-        *this = uTemp;
-        return -1;
-    }
-
-    iBeginIndex = iDelimiterIndex + 1;
-
-    // Parse double values.
-    std::wstring wstrNumber;
-
-    // Get delay between key presses expectation.
-    strTemp = strTemp.substr(iBeginIndex);
-    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
-    wstrNumber = strTemp.substr(0, iDelimiterIndex);
-    this->setPressExp(stod(wstrNumber));
-
-    if (!dPressExpectation)
-    {
-        showError(L"User::parseEntry()::PRESS_EXPECTATION");
-        *this = uTemp;
-        return -1;
-    }
-
-    iBeginIndex = iDelimiterIndex + 1;
-
-    // Get delay between key presses variance.
-    strTemp = strTemp.substr(iBeginIndex);
-    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
-    wstrNumber = strTemp.substr(0, iDelimiterIndex);
-    this->setPressVar(stod(wstrNumber));
-
-    if (!dPressVariance)
-    {
-        showError(L"User::parseEntry()::PRESS_VARIANCE");
-        *this = uTemp;
-        return -1;
-    }
-
-    iBeginIndex = iDelimiterIndex + 1;
-
-    // Get key hold duration expectation.
-    strTemp = strTemp.substr(iBeginIndex);
-    iDelimiterIndex = strTemp.find(CREDS_DELIMITER);
-    wstrNumber = strTemp.substr(0, iDelimiterIndex);
-    this->setHoldExp(stod(wstrNumber));
-
-    if (!dHoldExpectation)
-    {
-        showError(L"User::parseEntry()::HOLD_EXPECTATION");
-        *this = uTemp;
-        return -1;
-    }
-
-    // Get key hold duration variance.
-    iDelimiterIndex = strTemp.find(L"\n");
-    wstrNumber = strTemp.substr(iBeginIndex, iDelimiterIndex);
-    this->setHoldVar(stod(wstrNumber));
-
-    if (!dHoldVariance)
-    {
-        showError(L"User::parseEntry()::HOLD_VARIANCE");
-        *this = uTemp;
-        return -1;
-    }
-
-    return 0;
 }
