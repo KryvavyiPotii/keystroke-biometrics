@@ -19,19 +19,21 @@
 #define ELEMENT_HEIGHT  ELEMENT_OFFSET * 2
 #define BUTTON_WIDTH    ELEMENT_OFFSET * 6
 #define MAIN_WIDTH		TEXT_WIDTH + ELEMENT_OFFSET * 2
-#define MAIN_HEIGHT	    ELEMENT_OFFSET * 11
+#define MAIN_HEIGHT	    ELEMENT_OFFSET * 13
 #define FORM_WIDTH		TEXT_WIDTH + ELEMENT_OFFSET * 2
-#define FORM_HEIGHT	    ELEMENT_OFFSET * 17
+#define FORM_HEIGHT	    ELEMENT_OFFSET * 19
 
 // Window identifiers.
 #define MAIN_LOGIN        10
 #define MAIN_REGISTER     11
+#define MAIN_ABOUT        12
 #define FORM_LOGIN        20
 #define FORM_REGISTER     21
 #define FORM_USERNAME     22
 #define FORM_PASSWORD     23
 #define FORM_SUBMIT       24
 #define FORM_CANCEL       25
+#define FORM_ABOUT        26
 
 // Message identifiers.
 #define WM_SENDKEYSTROKEDATA    (WM_USER + 0x0001)
@@ -43,15 +45,37 @@
 #define SRID_PRESS  1
 #define SRID_HOLD   2
 
+// Return values of EDIT control reading functions.
+#define READ_ERROR     -1
+#define READ_EMPTY     1
+#define READ_TOOSHORT  2
+#define READ_FORBIDDEN 3
+
 // Security.
 #define CREDS_DELIMITER     L"$"
-#define USERNAME_SIZE       32
-#define PASSWORD_SIZE       12
+#define USERNAME_MAXSIZE    32
+#define PASSWORD_MAXSIZE    12
+#define PASSWORD_MINSIZE    6
 
 // Path to file with user credentials.
 const wchar_t cstrCredsPath[] = L"./creds.txt";
 // List of banned characters for valid function.
-const wchar_t wcBanned[] = { L'%', CREDS_DELIMITER[0] };
+const wchar_t cstrBanned[] = { L'%', CREDS_DELIMITER[0] };
+// Help message string of the main window.
+std::wstring strMainAbout = L"Author: KryvavyiPotii\n\n"
+    L"    It's a Win API C++ security program with implemented keystroke biometrics.\n"
+    L"    The user can register a new account or login into an existing one.\n"
+    L"    Regardless of chosen option they need to specify a username with a password.\n"
+    L"    During entering the password, keystroke data is gathered and used as the second authentication factor.";
+// Help message string of the form.
+std::wstring strFormAbout = L"Input requirements:\n* Username maximum length is "
+    + std::to_wstring(USERNAME_MAXSIZE) + L".\n"
+    + L"* Password minimum length is " + std::to_wstring(PASSWORD_MINSIZE)
+    + L" and maximum length is " + std::to_wstring(PASSWORD_MAXSIZE) + L".\n"
+    L"* Input should contain only letters and digits.\n"
+    L"    Try to write password as naturally as it is possible and avoid making mistakes.\n"
+    L"    In case you mistyped a character, press BACKSPACE or DELETE to clean the whole box and delete gathered data.\n"
+    L"    In order to quickly submit the form you can press ENTER while password box is active.";
 
 // Struct that contains data about a key press.
 struct KeyPress
@@ -75,26 +99,59 @@ public:
     User() {}
 
     // Methods to retrieve user credentials.
+    // Return value: strUsername
     std::wstring getUsername();
+    // Return value: strPassword
     std::wstring getPassword();
+    // Return value: statsPress
     Stats getPressStats();
+    // Return value: statsHold
     Stats getHoldStats();
 
     // Methods to set user credentials.
-    void setUsername(const std::wstring strUsername);
-    void setPassword(const std::wstring strPassword);
+    // Arguments:
+    //     [in] strUsername - reference to a wstring with a new username.
+    void setUsername(const std::wstring& strUsername);
+    // Arguments:
+    //     [in] strPassword - reference to a wstring with a new password.
+    void setPassword(const std::wstring& strPassword);
+    // Arguments:
+    //     [in] statsPress - reference to new key press statistics.
     void setPressStats(const Stats& statsPress);
+    // Arguments:
+    //     [in] vPressData - reference to a vector with key press data.
     void setPressStats(const std::vector<DWORD>& vPressData);
+    // Arguments:
+    //     [in] statsHold - reference to new key hold statistics.
     void setHoldStats(const Stats& statsHold);
+    // Arguments:
+    //     [in] vPressData - reference to a vector with key hold data.
     void setHoldStats(const std::vector<DWORD>& vHoldData);
 
-    // Fill object's parameters based on the credentials string.
+    // Fill user's parameters based on the credentials string.
+    // Arguments:
+    //     [in] strUsername - reference to a wstring with a name of the required user.
+    //     [in] strCreds - reference to a wstring with all credentials.
+    // Return value:
+    //     Success - 0.
+    //     Failure - -1.
     int getCreds(const std::wstring& strUsername, const std::wstring& strCreds);
-    // Add/update user's entry to credentials string.
+    // Add user's entry to the credentials string or update it.
+    // Arguments:
+    //     [in] strCreds - reference to a wstring with all credentials.
+    // Return value:
+    //     Success - 0.
+    //     Failure - -1.
     int setCreds(std::wstring& strCreds);
 
-    // Check if user is registered by checking the credentials string.
-    int isRegistered(const std::wstring& strCreds);
+    // Check if user is registered.
+    // Arguments:
+    //     [in] strCreds - reference to a string with all credentials.
+    // Return value:
+    //     User is registered - 1.
+    //     User isn't registered - 0.
+    //     Failure - -1.
+    int registered(const std::wstring& strCreds);
 
     // Find position and length of user credentials entry.
     // Arguments:
@@ -104,8 +161,14 @@ public:
     //     Failure - 2D vector { -1; -1 }.
     std::vector<int> findEntry(const std::wstring& strCreds);
     // Create an entry from user parameters.
+    // Return value: wstring entry.
     std::wstring createEntry();
     // Parse an entry with credentials and fill user parameters.
+    // Arguments:
+    //     [in] strEntry - reference to a wstring with an entry.
+    // Return value:
+    //     Success - 0.
+    //     Failure - -1.
     int parseEntry(const std::wstring& strEntry);
 
 private:
@@ -115,13 +178,20 @@ private:
     Stats statsHold = { 0, 0, 0 };
 };
 
-// GUI .
+// GUI.
 // Main window procedure.
 LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 // Form window procedure.
 LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 // Keystroke biometrics window procedure.
 LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+// Create login/registration form window.
+// Arguments:
+//     [in] hwndOwner - handle to the main window.
+//     [in] iType - type of the form (FORM_LOGIN or FORM_REGISTER).
+// Return value:
+//     Success - handle to the created form window.
+//     Failure - NULL pointer.
 HWND createForm(HWND hwndOwner, int iType);
 // Add controls to the main window.
 // Arguments:
@@ -130,13 +200,80 @@ HWND createForm(HWND hwndOwner, int iType);
 //     Success - 0.
 //     Failure - -1.
 int addMainControls(HWND hwndMain);
+// Add a menu to the main window.
+// Arguments:
+//     [in] hwndMain - handle to the main window.
+// Return value:
+//     Success - 0.
+//     Failure - -1.
+int addMainMenu(HWND hwndMain);
+// Add controls to the form window.
+// Arguments:
+//     [in] hwndForm - handle to the form window.
+// Return value:
+//     Success - 0.
+//     Failure - -1.
 int addFormControls(HWND hwndForm);
+// Add a menu to the form window.
+// Arguments:
+//     [in] hwndForm - handle to the form window.
+// Return value:
+//     Success - 0.
+//     Failure - -1.
+int addFormMenu(HWND hwndForm);
+// Send data to another window.
+// This function is used for sending keystroke data from password EDIT control to the form window.
+// Arguments:
+//     [in] hwndReceiver - handle to a receiver window.
+//     [in] hwndSender - handle to a sender window.
+//     [in] vData - reference to a vector with keystoke data of one type.
+//     [in] dwID - identifier of the data that is being sent (SRID_PRESS or SRID_HOLD).
 void sendData(HWND hwndReceiver, HWND hwndSender, const std::vector<DWORD>& vData, DWORD dwID);
+// Clear text in EDIT control of a window/dialog and set keyboard focus to it.
+// Arguments:
+//     [in] hwndParent - handle to a parent window/dialog.
+//     [in] iWindowID - identifier of a control.
+void clearEditControl(HWND hwndParent, int iWindowID);
 
-// Credentials processing.
-int identifyUser(User* pUser, const std::wstring& strCreds, HWND hwndForm);
-int authenticateUser(User* pUser, std::wstring& strCreds, HWND hwndForm);
+// Login user with 2FA:
+// 1. Password (something that I know)
+// 2. Keystroke biometrics (something that I am)
+// Arguments:
+//     [in, out] pUser - pointer to a User object.
+//               Before function call it must already contain statistical data and a username.
+//               After successful authentication password is added to the pointed object.
+//     [in, out] strCreds - reference to a wstring with all credentials.
+//               After successful authentication user credentials are updated.
+//     [in] hwndForm - handle to the form window.
+// Return value:
+//     User is authenticated - 1.
+//     User isn't authenticated - 0.
+//     Failure - -1.
+int loginUser(User* pUser, std::wstring& strCreds, HWND hwndForm);
+// Register a new user.
+// Arguments:
+//     [in, out] pUser - pointer to a User object.
+//               Before function call it must already contain statistical data.
+//               After successful authentication username and password are added to the pointed object.
+//     [in, out] strCreds - reference to a wstring with all credentials.
+//               After successful registration user credentials are added.
+//     [in] hwndForm - handle to the form window.
+// Return value:
+//     Success - 0.
+//     Failure - -1.
 int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm);
+// Read input for an EDIT control of a form.
+// Arguments:
+//     [in, out] strInput - reference to a wstring that receives input.
+//     [in] hwndForm - handle to the form window.
+//     [in] iEditID - windows identifier of the EDIT control (FORM_USERNAME or FORM_PASSWORD).
+// Return value:
+//     Success - 0.
+//     Reading error                   - READ_ERROR.
+//     Empty input                     - READ_EMPTY.
+//     Too short input                 - READ_TOOSHORT.
+//     Input with forbidden characters - READ_FORBIDDEN.
+int readInput(std::wstring& strInput, HWND hwndForm, int iEditID);
 // Read contents of the credentials file.
 // File is expected to have UTF-8 encoding.
 // Arguments:
@@ -145,61 +282,90 @@ int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm);
 //     Success - 0.
 //     Failure - -1.
 int readCreds(std::wstring& strCreds);
+// Write data to the credentials file.
+// File is expected to have UTF-8 encoding.
+// Arguments:
+//     [in] strCreds - reference to wstring that receives credentials.
+//     [in] mode - mode in which binary file will be opened.
+//          In the function it is ORed with std::ios::binary.
+// Return value:
+//     Success - 0.
+//     Failure - -1.
 int writeCreds(const std::wstring& strCreds, std::ios::openmode mode);
 // Check entered credentials for banned characters.
 // Arguments:
-//     [in] strInput - reference to string with credentials.
+//     [in] strInput - reference to a wstring with data.
 // Return value:
 //     Success - 1.
-//     Failure - 0 (user not found), -1 (error).
+//     Failure - 0.
 int valid(const std::wstring& strInput);
-// Convert UTF-8 string to wide character string.
+// Convert a UTF-8 string to a wide character string.
 // Arguments:
-//     [in, out] strWide - reference to wstring that receives converted data.
-//     [in] strMultibyte - reference to string with UTF-8 data.
+//     [in, out] strWide - reference to a wstring that receives converted data.
+//     [in] strMultibyte - reference to a string with UTF-8 data.
 // Return value:
 //     Success - 0.
 //     Failure - -1.
 int toWide(std::wstring& strWide, const std::string& strMultibyte);
-// Convert wide character string to UTF-8 string.
+// Convert a wide character string to a UTF-8 string.
 // Arguments:
-//     [in, out] strMultibyte - reference to string that receives converted data.
-//     [in] strWide - reference to wstring.
+//     [in, out] strMultibyte - reference to a string that receives converted data.
+//     [in] strWide - reference to a wstring.
 // Return value:
 //     Success - 0.
 //     Failure - -1.
 int toMultibyte(std::string& strMultibyte, const std::wstring& strWide);
 
 // Statistics.
+// Calculate expectation of the passed data.
+// Arguments:
+//     [in] vData - reference to a vector with data to be processed.
+// Return value: expectation.
 double expectation(const std::vector<DWORD>& vData);
+// Calculate variance of the passed data.
+// Arguments:
+//     [in] vData - reference to a vector with data to be processed.
+// Return value: variance.
 double variance(const std::vector<DWORD>& vData);
+// Calculate variance of the passed data.
+// Arguments:
+//     [in] dExp - precalculated expectation of the passed data.
+//     [in] vData - reference to a vector with data to be processed.
+// Return value: variance.
 double variance(double dExp, const std::vector<DWORD>& vData);
-int excludeErrors(std::vector<DWORD>* vData);
+// Apply of an algorithm of error exclusion in observed data.
+// Arguments:
+//     [in, out] vData - reference to a vector with data to be processed.
+void excludeErrors(std::vector<DWORD>* vData);
+// Create a Stats struct out of the passed data.
+// Arguments:
+//     [in] vData - reference to a vector with data to be processed.
+// Return value: Stats struct.
 Stats calculateStats(const std::vector<DWORD>& vData);
+// Check homogeneity of two variances and equality of two centers of distribution.
+// Arguments:
+//     [in] statsIn1 - reference to the first Stats struct.
+//     [in] statsIn2 - reference to the second Stats struct.
+// Return value:
+//     Stats are equal - 1.
+//     Stats aren't equal - 0.
 int compareStats(const Stats& statsIn1, const Stats& statsIn2);
 
 // Debugging.
 // Show error message box.
 // Arguments:
-//     [in] strError - wstring with error message.
+//     [in] strError - reference to a wstring with error message.
 void showError(const std::wstring& strError);
-// Show value of some numeric variable.
-// Arguments:
-//     [in] strName - variable name.
-//         However, it can be any message that developer finds comfortable enough.
-//     [in] aValue - numeric value that needs to be shown.
-void showValue(const std::wstring& strName, auto aValue);
-void DBG_dwShowArr(const DWORD* dwArr, int iSize);
 
 std::wstring User::getUsername() { return strUsername; }
 std::wstring User::getPassword() { return strPassword; }
 Stats User::getPressStats() { return statsPress; }
 Stats User::getHoldStats() { return statsHold; }
-void User::setUsername(const std::wstring strUsername)
+void User::setUsername(const std::wstring& strUsername)
 {
     this->strUsername = strUsername;
 }
-void User::setPassword(const std::wstring strPassword)
+void User::setPassword(const std::wstring& strPassword)
 {
     this->strPassword = strPassword;
 }
@@ -245,7 +411,7 @@ int User::getCreds(const std::wstring& strUsername, const std::wstring& strCreds
     strEntry = strCreds.substr(vIndices[0], vIndices[1]); // do not include line feed
 
     // Parse entry and fill User object.
-    if (parseEntry(strCreds) < 0)
+    if (parseEntry(strEntry) < 0)
     {
         return -1;
     }
@@ -258,7 +424,7 @@ int User::setCreds(std::wstring& strCreds)
     std::wstring strNewEntry = createEntry();
     
     // If user already has an entry, remove it.
-    if (isRegistered(strCreds))
+    if (registered(strCreds))
     {
         // Find the old entry
         std::vector<int> vIndices = findEntry(strCreds);
@@ -277,7 +443,7 @@ int User::setCreds(std::wstring& strCreds)
 
     return 0;
 }
-int User::isRegistered(const std::wstring& strCreds)
+int User::registered(const std::wstring& strCreds)
 {
     // Find position and length of user entry.
     std::vector<int> vIndices = findEntry(strCreds);
@@ -558,6 +724,67 @@ int addMainControls(HWND hwndMain)
 
     return 0;
 }
+int addMainMenu(HWND hwndMain)
+{
+    // Create and add menu bar.
+    HMENU hMenuBar = CreateMenu();
+    HMENU hMenuFile = CreateMenu();
+    HMENU hMenuHelp = CreateMenu();
+
+    if (!hMenuBar || !hMenuFile || !hMenuHelp)
+    {
+        showError(L"addMainMenu::CreateMenu");
+        return -1;
+    }
+
+    // Create menu options.
+    if (!AppendMenu(hMenuHelp, MF_STRING, MAIN_ABOUT, L"About program"))
+    {
+        showError(L"addMainMenu::AppendMenu::ABOUT");
+        return -1;
+    }
+
+    if (!AppendMenu(hMenuFile, MF_STRING, MAIN_LOGIN, L"Login"))
+    {
+        showError(L"addMainMenu::AppendMenu::LOGIN");
+        return -1;
+    }
+    if (!AppendMenu(hMenuFile, MF_STRING, MAIN_REGISTER, L"Register"))
+    {
+        showError(L"addMainMenu::AppendMenu::REGISTER");
+        return -1;
+    }
+    if (!AppendMenu(hMenuFile, MF_SEPARATOR, 0, NULL))
+    {
+        showError(L"addMainMenu::AppendMenu::SEPARATOR");
+        return -1;
+    }
+    if (!AppendMenu(hMenuFile, MF_STRING, WM_DESTROY, L"Exit"))
+    {
+        showError(L"addMainMenu::AppendMenu::EXIT");
+        return -1;
+    }
+
+    // Add created options to menu bar.
+    if (!AppendMenu(hMenuBar, MF_POPUP, (UINT_PTR)hMenuFile, L"File"))
+    {
+        showError(L"addMainMenu::FILE::AppendMenu");
+        return -1;
+    }
+    if (!AppendMenu(hMenuBar, MF_POPUP, (UINT_PTR)hMenuHelp, L"Help"))
+    {
+        showError(L"addMainMenu::HELP::AppendMenu");
+        return -1;
+    }
+
+    if (!SetMenu(hwndMain, hMenuBar))
+    {
+        showError(L"addMainMenu::SetMenu");
+        return -1;
+    }
+
+    return 0;
+}
 int addFormControls(HWND hwndForm)
 {
     if (!CreateWindow(
@@ -574,7 +801,7 @@ int addFormControls(HWND hwndForm)
         return -1;
     }
 
-    if (!CreateWindow(
+    HWND hwndUsername = CreateWindow(
         L"EDIT", L"",
         ES_AUTOHSCROLL | WS_BORDER | WS_CHILD | WS_VISIBLE,
         ELEMENT_OFFSET,
@@ -582,11 +809,16 @@ int addFormControls(HWND hwndForm)
         TEXT_WIDTH - ELEMENT_OFFSET * 2,
         ELEMENT_HEIGHT,
         hwndForm, (HMENU)FORM_USERNAME, NULL, NULL
-    ))
+    );
+        
+    if (!hwndUsername)
     {
         showError(L"addFormControls::EDIT::USERNAME");
         return -1;
     }
+
+    // Limit size of input to username EDIT control.
+    SendMessage(hwndUsername, EM_LIMITTEXT, USERNAME_MAXSIZE, 0);
 
     if (!CreateWindow(
         L"STATIC", L"Password:",
@@ -618,6 +850,8 @@ int addFormControls(HWND hwndForm)
         return -1;
     }
 
+    SendMessage(hwndPassword, EM_LIMITTEXT, PASSWORD_MAXSIZE, 0);
+
     // Subclass the password EDIT control to gather keystroke data.
     SetWindowSubclass(hwndPassword, &KeystrokeProc, 0, 0);
 
@@ -625,7 +859,7 @@ int addFormControls(HWND hwndForm)
         L"BUTTON", L"Submit",
         WS_BORDER | WS_CHILD | WS_VISIBLE,
         ELEMENT_OFFSET,
-        FORM_HEIGHT - ELEMENT_OFFSET * 7,
+        ELEMENT_OFFSET * 10,
         BUTTON_WIDTH,
         ELEMENT_HEIGHT,
         hwndForm, (HMENU)FORM_SUBMIT, NULL, NULL
@@ -639,7 +873,7 @@ int addFormControls(HWND hwndForm)
         L"BUTTON", L"Cancel",
         WS_BORDER | WS_CHILD | WS_VISIBLE,
         FORM_WIDTH - BUTTON_WIDTH - ELEMENT_OFFSET * 3,
-        FORM_HEIGHT - ELEMENT_OFFSET * 7,
+        ELEMENT_OFFSET * 10,
         BUTTON_WIDTH,
         ELEMENT_HEIGHT,
         hwndForm, (HMENU)FORM_CANCEL, NULL, NULL
@@ -651,6 +885,41 @@ int addFormControls(HWND hwndForm)
 
     return 0;
 }
+int addFormMenu(HWND hwndForm)
+{
+    // Create and add menu bar.
+    HMENU hMenuBar = CreateMenu();
+    HMENU hMenuHelp = CreateMenu();
+
+    if (!hMenuBar || !hMenuHelp)
+    {
+        showError(L"addFormMenu::CreateMenu");
+        return -1;
+    }
+
+    // Create menu options.
+    if (!AppendMenu(hMenuHelp, MF_STRING, FORM_ABOUT, L"About form"))
+    {
+        showError(L"addFormMenu::AppendMenu::ABOUT");
+        return -1;
+    }
+
+    if (!AppendMenu(hMenuBar, MF_POPUP, (UINT_PTR)hMenuHelp, L"Help"))
+    {
+        showError(L"addFormMenu::HELP::AppendMenu");
+        return -1;
+    }
+
+    if (!SetMenu(hwndForm, hMenuBar))
+    {
+        showError(L"addFormMenu::SetMenu");
+        return -1;
+    }
+
+    return 0;
+}
+// Optimization of sendData must be turned off.
+// Otherwise it isn't executed.
 #pragma optimize( "", off )
 void sendData(HWND hwndReceiver, HWND hwndSender, const std::vector<DWORD>& vData, DWORD dwID)
 {
@@ -670,93 +939,50 @@ void sendData(HWND hwndReceiver, HWND hwndSender, const std::vector<DWORD>& vDat
     );
 }
 #pragma optimize( "", on )
-
-int identifyUser(User* pUser, const std::wstring& strCreds, HWND hwndForm)
+void clearEditControl(HWND hwndParent, int iWindowID)
 {
-    // Get handle to username field.
-    HWND hwndUsername = GetDlgItem(hwndForm, FORM_USERNAME);
+    // Remove entered password.
+    HWND hwndEdit = GetDlgItem(hwndParent, iWindowID);
 
-    if (!hwndUsername)
+    SendMessage(hwndEdit, WM_SETTEXT, 0, (LPARAM)L"");
+
+    // Set keyboard focus to the password EDIT control.
+    SetFocus(hwndEdit);
+}
+
+int loginUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
+{
+    // Read and check the username.
+    std::wstring strUsername;
+    char iResult = readInput(strUsername, hwndForm, FORM_USERNAME);
+
+    if (iResult != 0)
     {
-        showError(L"identifyUser::GetDlgItem");
-        return -1;
-    }
-
-    // Get username.
-    std::wstring strUsername(USERNAME_SIZE + 1, 0);
-    {
-        int iSize = GetWindowText(hwndUsername, &strUsername[0], USERNAME_SIZE);
-
-        if (!iSize)
-        {
-            if (!GetLastError())
-            {
-                MessageBox(
-                    NULL,
-                    L"Username is empty",
-                    L"Alert",
-                    MB_OK | MB_ICONWARNING
-                );
-            }
-            else
-            {
-                showError(L"identifyUser::GetWindowText");
-            }
-
-            return -1;
-        }
-
-        // Resize buffer to remove extra null bytes.
-        strUsername.resize(iSize);
-
-        // Check if username contains banned characters.
-        if (!valid(strUsername))
+        if (iResult == READ_EMPTY)
         {
             MessageBox(
                 NULL,
-                L"Username must not contain special characters",
+                L"Username is empty",
                 L"Alert",
                 MB_OK | MB_ICONWARNING
             );
-            return -1;
         }
+
+        // Cleanup.
+        clearEditControl(hwndForm, FORM_USERNAME);
+
+        return -1;
     }
 
     pUser->setUsername(strUsername);
 
-    // Check if user is registered.
-    return pUser->isRegistered(strCreds);
-}
-int authenticateUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
-{
-    // Get user password.
-    std::wstring strPassword(PASSWORD_SIZE + 1, 0);
+    // Read and check the password.
+    std::wstring strPassword;
+    iResult = readInput(strPassword, hwndForm, FORM_PASSWORD);
+
+    if (iResult != 0)
     {
-        // Get handle to password field.
-        HWND hwndPassword = GetDlgItem(hwndForm, FORM_PASSWORD);
-
-        if (hwndPassword == NULL)
-        {
-            showError(L"authenticateUser::GetDlgItem");
-            return -1;
-        }
-
-        // Get password.
-        int iSize = GetWindowText(hwndPassword, &strPassword[0], PASSWORD_SIZE);
-
-        // Check if reading didn't fail.
-        if (GetLastError())
-        {
-            return -1;
-        }
-        // Check if password field is empty.
-        if (!iSize)
-        {
-            return 0;
-        }
-
-        // Resize buffer to remove extra null bytes.
-        strPassword.resize(iSize);
+        return 0;
     }
 
     pUser->setPassword(strPassword);
@@ -766,7 +992,7 @@ int authenticateUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
 
     if (userCreds.getCreds(pUser->getUsername(), strCreds) < 0)
     {
-        return -1;
+        return 0;
     }
 
     // Compare passwords.
@@ -803,8 +1029,42 @@ int authenticateUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
 }
 int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
 {
-    // Get username.
-    int iResult = identifyUser(pUser, strCreds, hwndForm);
+    // Read and check the username.
+    std::wstring strUsername;
+    char iResult = readInput(strUsername, hwndForm, FORM_USERNAME);
+
+    if (iResult != 0)
+    {
+        if (iResult == READ_EMPTY)
+        {
+            MessageBox(
+                NULL,
+                L"Username field is empty",
+                L"Alert",
+                MB_OK | MB_ICONWARNING
+            );
+        }
+        else if (iResult == READ_FORBIDDEN)
+        {
+            MessageBox(
+                NULL,
+                L"Username contains forbidden characters",
+                L"Alert",
+                MB_OK | MB_ICONWARNING
+            );
+        }
+
+        // Cleanup.
+        clearEditControl(hwndForm, FORM_PASSWORD);
+        clearEditControl(hwndForm, FORM_USERNAME);
+
+        return -1;
+    }
+
+    pUser->setUsername(strUsername);
+
+    // Check if the user is already registered.
+    iResult = pUser->registered(strCreds);
 
     if (iResult == 1)
     {
@@ -814,6 +1074,10 @@ int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
             L"Alert",
             MB_OK | MB_ICONWARNING
         );
+
+        clearEditControl(hwndForm, FORM_PASSWORD);
+        clearEditControl(hwndForm, FORM_USERNAME);
+
         return -1;
     }
     else if (iResult < 0)
@@ -821,46 +1085,45 @@ int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
         return -1;
     }
 
-    // Get user password.
-    std::wstring strPassword(PASSWORD_SIZE + 1, 0);
+    // Read and check the password.
+    std::wstring strPassword;
+    iResult = readInput(strPassword, hwndForm, FORM_PASSWORD);
+
+    if (iResult != 0)
     {
-        // Get handle to password field.
-        HWND hwndPassword = GetDlgItem(hwndForm, FORM_PASSWORD);
-
-        if (hwndPassword == NULL)
-        {
-            showError(L"authenticateUser::GetDlgItem");
-            return -1;
-        }
-
-        // Get password.
-        int iSize = GetWindowText(hwndPassword, &strPassword[0], PASSWORD_SIZE);
-
-        // Check if reading didn't fail.
-        if (GetLastError())
-        {
-            return -1;
-        }
-        // Check if the password field is empty.
-        if (!iSize)
-        {
-            return 0;
-        }
-
-        // Resize buffer to remove extra null bytes.
-        strPassword.resize(iSize);
-
-        // Check if the password contains forbidden characters.
-        if (!valid(strPassword))
+        if (iResult == READ_EMPTY)
         {
             MessageBox(
                 NULL,
-                L"Password must not contain special characters",
+                L"Password field is empty",
                 L"Alert",
                 MB_OK | MB_ICONWARNING
             );
-            return -1;
         }
+        else if (iResult == READ_TOOSHORT)
+        {
+            MessageBox(
+                NULL,
+                L"Password is too short",
+                L"Alert",
+                MB_OK | MB_ICONWARNING
+            );
+        }
+        else if (iResult == READ_FORBIDDEN)
+        {
+            MessageBox(
+                NULL,
+                L"Password contains forbidden characters",
+                L"Alert",
+                MB_OK | MB_ICONWARNING
+            );
+        }
+
+        // Cleanup.
+        clearEditControl(hwndForm, FORM_PASSWORD);
+        clearEditControl(hwndForm, FORM_USERNAME);
+
+        return -1;
     }
 
     pUser->setPassword(strPassword);
@@ -879,12 +1142,70 @@ int registerUser(User* pUser, std::wstring& strCreds, HWND hwndForm)
 
     return 0;
 }
+int readInput(std::wstring& strInput, HWND hwndForm, int iEditID)
+{
+    // Get handle to the EDIT control.
+    HWND hwndEdit = GetDlgItem(hwndForm, iEditID);
+
+    if (!hwndEdit)
+    {
+        showError(L"readInput::GetDlgItem");
+        return -1;
+    }
+
+    // Define maximum and minimum size of input.
+    int iInputMaxSize, iInputMinSize = 0;
+
+    if (iEditID == FORM_USERNAME)
+    {
+        iInputMaxSize = USERNAME_MAXSIZE;
+    }
+    else if (iEditID == FORM_PASSWORD)
+    {
+        iInputMaxSize = PASSWORD_MAXSIZE;
+        iInputMinSize = PASSWORD_MINSIZE;
+    }
+
+    // Get username.
+    strInput.resize(iInputMaxSize + 1, 0);
+    {
+        int iSize = GetWindowText(hwndEdit, &strInput[0], iInputMaxSize);
+
+        // Check if reading didn't fail.
+        if (GetLastError())
+        {
+            showError(L"readInput::GetWindowText");
+            return READ_ERROR;
+        }
+        // Check if the input control is empty.
+        if (!iSize)
+        {
+            return READ_EMPTY;
+        }
+        // Check if input is not too short.
+        if (iInputMinSize && iSize < iInputMinSize)
+        {
+            return READ_TOOSHORT;
+        }
+
+        // Resize buffer to remove extra null bytes.
+        strInput.resize(iSize);
+
+        // Check if the username contains banned characters.
+        if (!valid(strInput))
+        {
+            return READ_FORBIDDEN;
+        }
+    }
+
+    return 0;
+}
 int valid(const std::wstring& strInput)
 {
     // Check banned characters.
-    for (int i = 0; i < wcslen(wcBanned); i++)
+    for (int i = 0; i < wcslen(cstrBanned); i++)
     {
-        if (strInput.find(wcBanned[i]) != std::wstring::npos)
+        if (strInput.find(cstrBanned[i]) != std::wstring::npos)
         {
             return 0;
         }
@@ -894,13 +1215,25 @@ int valid(const std::wstring& strInput)
 }
 int readCreds(std::wstring& strCreds)
 {
-    // Open file for reading.
+    // Open the file with credentials for reading.
     std::ifstream credsFile(cstrCredsPath, std::ios::binary);
 
     if (!credsFile.is_open())
     {
-        showError(L"readCreds::std::ifstream::is_open");
-        return -1;
+        // If the file doesn't exist, create it.
+        if (writeCreds(L"", std::ios::out) < 0)
+        {
+            return -1;
+        }
+
+        // Try to open the created file.
+        credsFile.open(cstrCredsPath, std::ios::binary);
+
+        if (!credsFile.is_open())
+        {
+            showError(L"readCreds::std::ifstream::is_open");
+            return -1;
+        }
     }
 
     // Read file contents
@@ -947,6 +1280,12 @@ int writeCreds(const std::wstring& strCreds, std::ios::openmode mode)
         showError(L"writeCreds::toMultibyte");
         return -1;
     }
+
+    // Remove extra null bytes.
+    strMultibyteCreds.erase(
+        std::find(strMultibyteCreds.begin(), strMultibyteCreds.end(), '\0'),
+        strMultibyteCreds.end()
+    );
 
     // Write converted credentials to file.
     credsFile << strMultibyteCreds;
@@ -1049,14 +1388,7 @@ double variance(const std::vector<DWORD>& vData)
 
     double dExp = expectation(vData);
 
-    for (DWORD i = 0; i < vData.size(); i++)
-    {
-        dVar += (vData[i] - dExp) * (vData[i] - dExp);
-    }
-
-    dVar /= vData.size();
-
-    return dVar;
+    return variance(dExp, vData);
 }
 double variance(double dExp, const std::vector<DWORD>& vData)
 {
@@ -1067,29 +1399,31 @@ double variance(double dExp, const std::vector<DWORD>& vData)
         dVar += (vData[i] - dExp) * (vData[i] - dExp);
     }
 
-    dVar /= vData.size();
+    dVar /= vData.size() - 1;
 
-    return dVar;
+    return std::sqrt(dVar);
 }
-int excludeErrors(std::vector<DWORD>* vData)
+void excludeErrors(std::vector<DWORD>* vData)
 {
     // Create a vector copy for storing not excluded elements.
     std::vector<DWORD> vExcluded;
 
     for (int i = 0; i < vData->size(); i++)
     {
-        // Create a vector without i-th element.
+        // Create a vector without the i-th element.
         std::vector<DWORD> vTemp = *vData;
 
         vTemp.erase(vTemp.begin() + i);
 
         // Calculate Student's coefficient.
         double M = expectation(vTemp);
-        double S = std::sqrt(variance(M, vTemp));
+        double S = variance(M, vTemp);
         double t = (vData->at(i) - M) / S;
+
+        // Get absolute value.
         if (t < 0) t *= -1;
 
-        // Check if i-th element should be excluded.
+        // Check if the i-th element should be excluded.
         if (t <= t_05[vData->size() - 1])
         {
             vExcluded.push_back(vData->at(i));
@@ -1098,8 +1432,6 @@ int excludeErrors(std::vector<DWORD>* vData)
 
     // Remove marked elements.
     *vData = vExcluded;
-
-    return 0;
 }
 Stats calculateStats(const std::vector<DWORD>& vData)
 {
@@ -1109,7 +1441,6 @@ Stats calculateStats(const std::vector<DWORD>& vData)
 
     return { (int)vData.size(), dExpectation, dVariance };
 }
-#pragma optimize( "", off )
 int compareStats(const Stats& statsIn1, const Stats& statsIn2)
 {
     int n = statsIn1.iSize;
@@ -1128,58 +1459,31 @@ int compareStats(const Stats& statsIn1, const Stats& statsIn2)
     }
 
     // Calculate Student's coefficient.
-    double S = std::sqrt(((statsIn1.dVariance * statsIn1.dVariance
-        + statsIn2.dVariance * statsIn2.dVariance) * (n - 1)
-        / (2 * n - 1)));
+    double S = std::sqrt((statsIn1.dVariance * statsIn1.dVariance
+        + statsIn2.dVariance * statsIn2.dVariance)
+        * (n - 1) / (2 * n - 1));
 
-    double t = (statsIn1.dExpectation - statsIn2.dExpectation) * std::sqrt(n / 2);
+    double t = (statsIn1.dExpectation - statsIn2.dExpectation) * std::sqrt(n / 2) / S;
 
     if (t < 0) t *= -1;
 
     // Check calculated Student's coefficient.
     if (t > t_05[n - 1])
     {
-        t /= S;
-        if (t > t_05[n - 1])
-        {
-            return 0;
-        }
+        return 0;
     }
 
     return 1;
 }
-#pragma optimize( "", on )
 
 void showError(const std::wstring& strError)
 {
     std::wstringstream sstr;
 
-    sstr << strError << L". Error: " << GetLastError()
+    sstr << strError << L". Error code: " << GetLastError()
         << L" (0x" << std::hex << GetLastError() << L")" << std::endl;
 
     std::wstring str = sstr.str();
 
-    MessageBox(NULL, str.c_str(), L"Error", MB_OK);
-}
-void showValue(const std::wstring& strName, auto aValue)
-{
-    std::wstringstream sstrValue;
-
-    sstrValue << aValue << std::endl;
-
-    std::wstring strValue = sstrValue.str();
-
-    MessageBox(NULL, strValue.c_str(), strName.c_str(), 0);
-}
-void DBG_dwShowArr(const DWORD* dwArr, int iSize)
-{
-    std::wstring out;
-
-    for (int i = 0; i < iSize; i++)
-    {
-        out.append(L"\t");
-        out.append(std::to_wstring(dwArr[i]));
-    }
-
-    MessageBox(0, out.c_str(), L"Out", 0);
+    MessageBox(NULL, str.c_str(), L"Error", MB_OK | MB_ICONERROR);
 }
