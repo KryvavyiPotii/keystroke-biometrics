@@ -66,7 +66,7 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
     case WM_CREATE:
     {
-        if (addMainControls(hwnd) < 0)
+        if (addMainMenu(hwnd) < 0 || addMainControls(hwnd) < 0)
         {
             DestroyWindow(hwnd);
         }
@@ -128,6 +128,18 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             break;
         }
+
+        case MAIN_ABOUT:
+        {
+            MessageBox(
+                hwnd,
+                strMainAbout.c_str(),
+                L"About program",
+                MB_OK
+            );
+
+            break;
+        }
         }
 
         return 0;
@@ -149,7 +161,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
     case WM_CREATE:
     {
-        if (addFormControls(hwnd) < 0)
+        if (addFormMenu(hwnd) < 0 || addFormControls(hwnd) < 0)
         {
             DestroyWindow(hwnd);
         }
@@ -179,23 +191,23 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         // Cleanup.
         {
-            vPressData.clear();
-            vHoldData.clear();
-            iType = 0;
-
             // Remove password EDIT control subclass.
             HWND hwndPassword = GetDlgItem(hwnd, FORM_PASSWORD);
 
             RemoveWindowSubclass(hwndPassword, KeystrokeProc, 0);
         }
 
+        vPressData.clear();
+        vHoldData.clear();
+        iType = 0;
+
         // Enable and show the main window.
         {
             // Get main window handle.
             HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
 
-            EnableWindow(hwndOwner, TRUE);
             ShowWindow(hwndOwner, SW_SHOW);
+            EnableWindow(hwndOwner, TRUE);
         }
 
         DestroyWindow(hwnd);
@@ -206,6 +218,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_COPYDATA:
     {
         COPYDATASTRUCT* pcds = (COPYDATASTRUCT*)lParam;
+        static char iErrorShown = 0;
         
         switch (pcds->dwData)
         {
@@ -217,8 +230,6 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 (DWORD*)pcds->lpData + pcds->cbData / sizeof(DWORD)
             );
 
-            //DBG_dwShowArr(vPressData.data(), vPressData.size());
-
             break;
         }
 
@@ -229,8 +240,6 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 (DWORD*)pcds->lpData + pcds->cbData / sizeof(DWORD)
             );
 
-            //DBG_dwShowArr(vHoldData.data(), vHoldData.size());
-
             break;
         }
         }
@@ -238,6 +247,8 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         // If all data was received, proceed to next steps.
         if (!vPressData.empty() && !vHoldData.empty())
         {
+            iErrorShown = 0;
+
             // Exclude errors from gathered data.
             excludeErrors(&vPressData);
             excludeErrors(&vHoldData);
@@ -248,14 +259,10 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             else if (iType == FORM_REGISTER)
                 SendMessage(hwnd, WM_REGISTER, 0, 0);
         }
-        else if (vPressData.empty() && vHoldData.empty())
+        else if (vPressData.empty() && vHoldData.empty() && !iErrorShown)
         {
-            MessageBox(
-                NULL,
-                L"Failed to gather keystroke biometrics data",
-                L"Alert",
-                MB_OK | MB_ICONWARNING
-            );
+            showError(L"Failed to gather keystroke biometrics data");
+            iErrorShown = 1;
         }
 
         return 0;
@@ -278,74 +285,10 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         user.setPressStats(vPressData);
         user.setHoldStats(vHoldData);
 
-        // Check if user is registered.
-        if (identifyUser(&user, strCreds, hwnd) == 1)
-        {
-            // Check entered credentials.
-            if (authenticateUser(&user, strCreds, hwnd) == 1)
-            {
-                // Get the handle to the main window.
-                HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
+        // Check entered credentials.
+        char iLoggedIn = loginUser(&user, strCreds, hwnd);
 
-                if (!hwndOwner)
-                {
-                    showError(L"FormProc::GetWindow");
-                    return -1;
-                }
-
-                // Hide the main window.
-                ShowWindow(hwndOwner, SW_HIDE);
-                // Hide the form.
-                ShowWindow(hwnd, SW_HIDE);
-
-                // Authorize user.
-                MessageBox(
-                    NULL,
-                    L"You have successfully logged in.\n"
-                    L"Press \"OK\" or close this message to return to the main window.",
-                    L"Notification",
-                    MB_OK
-                );
-
-                // Close the form.
-                SendMessage(hwnd, WM_CLOSE, 0, 0);
-
-                return 0;
-            }
-        }
-
-        MessageBox(
-            NULL,
-            L"Incorrect username/password/biometrics.",
-            L"Alert",
-            MB_OK
-        );
-
-        // Cleanup.
-        vPressData.clear();
-        vHoldData.clear();
-
-        return -1;
-    }
-
-    // Register a new user.
-    case WM_REGISTER:
-    {
-        // Read credentials from the file.
-        std::wstring strCreds;
-
-        if (readCreds(strCreds) < 0)
-        {
-            return -1;
-        }
-
-        // Calculate user's statistical data.
-        User user;
-
-        user.setPressStats(vPressData);
-        user.setHoldStats(vHoldData);
-
-        if (registerUser(&user, strCreds, hwnd) == 0)
+        if (iLoggedIn == 1)
         {
             // Get the handle to the main window.
             HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
@@ -364,13 +307,67 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             // Authorize user.
             MessageBox(
                 NULL,
-                L"You have successfully registered.\n"
+                L"You have successfully logged in.\n"
                 L"Press \"OK\" or close this message to return to the main window.",
                 L"Notification",
                 MB_OK
             );
 
             // Close the form.
+            SendMessage(hwnd, WM_CLOSE, 0, 0);
+
+            return 0;
+        }
+        else if (!iLoggedIn)
+        {
+            showError(L"Incorrect username/password/biometrics");
+            clearEditControl(hwnd, FORM_PASSWORD);
+        }
+
+        // Cleanup.
+        vPressData.clear();
+        vHoldData.clear();
+
+        return -1;
+    }
+
+    // Register a new user.
+    case WM_REGISTER:
+    {
+        std::wstring strCreds;
+
+        if (readCreds(strCreds) < 0)
+        {
+            return -1;
+        }
+
+        User user;
+
+        user.setPressStats(vPressData);
+        user.setHoldStats(vHoldData);
+
+        if (registerUser(&user, strCreds, hwnd) == 0)
+        {
+            HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
+
+            if (!hwndOwner)
+            {
+                showError(L"FormProc::GetWindow");
+                return -1;
+            }
+
+            ShowWindow(hwndOwner, SW_HIDE);
+            ShowWindow(hwnd, SW_HIDE);
+
+            // Notify user.
+            MessageBox(
+                NULL,
+                L"You have successfully registered.\n"
+                L"Press \"OK\" or close this message to return to the main window.",
+                L"Notification",
+                MB_OK
+            );
+
             SendMessage(hwnd, WM_CLOSE, 0, 0);
 
             return 0;
@@ -384,6 +381,7 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_COMMAND:
+    {
         switch (LOWORD(wParam))
         {
         case FORM_SUBMIT:
@@ -401,9 +399,22 @@ LRESULT CALLBACK FormProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             SendMessage(hwnd, WM_CLOSE, 0, 0);
             break;
         }
+
+        case FORM_ABOUT:
+        {
+            MessageBox(
+                hwnd,
+                strFormAbout.c_str(),
+                L"About form",
+                MB_OK
+            );
+
+            break;
+        }
         }
 
         return 0;
+    }
 
     default:
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -467,7 +478,7 @@ LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
             SendMessage(hwndParent, WM_COMMAND, FORM_SUBMIT, 0);
             break;
         }
-        // Clear everything on BACKSPACE and DELETE press
+        // Clear everything on BACKSPACE and DELETE press.
         else if (wParam == VK_BACK || wParam == VK_DELETE)
         {
             // Remove entered text.
@@ -493,7 +504,7 @@ LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 
             vPressData.push_back(dwCurrPressTime - dwPrevPressTime);
 
-            // Enqueue key press information.
+            // Add key press information.
             KeyPress kp = { wParam, dwCurrPressTime };
 
             vKeyHeld.push_back(kp);
@@ -519,7 +530,7 @@ LRESULT CALLBACK KeystrokeProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPara
                     // Calculate key hold duration.
                     vHoldData.push_back(timeGetTime() - vKeyHeld[i].dwTime);
 
-                    // Remove the released key from the queue.
+                    // Remove the released key.
                     vKeyHeld.erase(vKeyHeld.begin() + i);
 
                     break;
